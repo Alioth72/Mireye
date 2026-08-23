@@ -1,0 +1,21 @@
+label,lat,lng,is_datacenter,note
+Ashburn VA - Data Center Alley,39.0438,-77.4874,1,Loudoun County; densest DC cluster in the US
+The Dalles OR,45.5946,-121.1787,1,Columbia River; hydro power + cool climate
+Prineville OR,44.3001,-120.8451,1,High desert; free cooling
+Umatilla OR,45.9174,-119.3420,1,Columbia basin
+Quincy WA,47.2343,-119.8526,1,Columbia basin; hydro
+Council Bluffs IA,41.2619,-95.8608,1,Wind corridor
+Altoona IA,41.6444,-93.4647,1,Wind corridor
+New Albany OH,40.0812,-82.8088,1,Columbus metro cluster
+Cheyenne WY,41.1400,-104.8202,1,Wind + cool climate
+San Antonio TX,29.4241,-98.4936,1,ERCOT
+Dallas TX,32.7767,-96.7970,1,ERCOT; major interconnect
+Phoenix-Mesa AZ,33.4152,-111.8315,1,Hot; large cluster despite cooling cost
+Santa Clara CA,37.3541,-121.9552,1,Silicon Valley; high power cost
+Elk Grove Village IL,42.0064,-87.9706,1,Chicago metro
+Atlanta GA,33.7490,-84.3880,1,Southeast hub
+Yellowstone backcountry WY,44.4280,-110.5885,0,Protected; no grid - negative example
+Mojave desert CA,35.0110,-116.0700,0,Remote; no fiber - negative example
+Adirondack forest NY,44.1126,-73.9226,0,Protected forest - negative example
+Everglades FL,25.7617,-80.9000,0,Wetland - negative example
+Rocky Mountain slope CO,39.6333,-106.5250,0,Steep terrain - negative example

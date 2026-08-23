@@ -46,7 +46,7 @@ SITES: list[tuple[str, float, float]] = [
     ("Rural KC — Enumclaw",     47.2040, -121.9910),
 ]
 
-METRIC = "data_center_optionality"
+METRIC = sys.argv[1] if len(sys.argv) > 1 else "data_center_optionality"
 
 
 async def main() -> None:
@@ -89,8 +89,9 @@ async def main() -> None:
                     print(f"  ! {label}: {outcome.error}", file=sys.stderr)
 
     # ---- report -----------------------------------------------------------
-    cols = ["power", "interconnect", "terrain", "cooling", "water", "clear"]
+    cols = [c for c in scoring.DEFAULT_WEIGHTS[METRIC]] + list(scoring.penalties_for(METRIC))
     hdr = f"{'site':<26}{'score':>7}  " + "".join(f"{c[:6]:>8}" for c in cols) + "   basis"
+    print(f"metric: {METRIC}  ({len(fields)} fields per location, 25 locations per site)")
     print(hdr)
     print("-" * len(hdr))
     for label, r in sorted(rows, key=lambda x: -x[1]["score"]):
@@ -115,9 +116,9 @@ async def main() -> None:
     verdict = (
         "PASS -- scores separate; Phase 3 can produce both alert and quiet"
         if max(seattle) - min(seattle) >= 0.30
-        else "FAIL -- Seattle does not discriminate; widen to King County (R1 mitigation)"
+        else "FAIL -- this metric does not discriminate across these sites"
     )
-    print(f"R1 verdict (Seattle spread >= 0.30): {verdict}")
+    print(f"R1 verdict for {METRIC} (Seattle spread >= 0.30): {verdict}")
 
 
 if __name__ == "__main__":
