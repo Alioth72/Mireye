@@ -25,6 +25,14 @@ inland coordinates in Texas, Florida, and northern Mexico.
 
 Outside that latitude band the field behaves correctly.
 
+**Scope of the defect is narrow and worth stating precisely.** Location resolution is not
+affected, and no other field is affected. In the same response for San Antonio City Hall,
+every other value is correct for Texas — `iso_rto: ERCOT`, `egrid_subregion: ERCT`,
+`elevation: 196.6 m`, `coast_distance_m: 168,939`, `design_wet_bulb: 25.2 °C`,
+`days_above_32c: 121`, `nearest_transmission_line_voltage_kv: 138`. Only the
+`protected_area_*` group is wrong. A single point-in-polygon match is returning the wrong
+row; nothing is being mis-located.
+
 ---
 
 ## Reproduction — using addresses only, no caller-supplied coordinates
@@ -67,6 +75,26 @@ Latitude sweep at fixed longitude `-98.4936`, 0.625° steps:
 | 32.500 – 35.000 | false | — |
 
 Band edges therefore lie between 25.000–25.625°N and 31.250–31.875°N.
+
+---
+
+## Longitude has no effect
+
+Fixed latitude **28.5°N**, longitude swept across the continental US:
+
+| lng | `political_region` | `protected_area_name` |
+|---|---|---|
+| -120.0 | (ocean) | Papahanaumokuakea |
+| -115.0 | (ocean) | Papahanaumokuakea |
+| -110.0 | Sonora, MX | Papahanaumokuakea |
+| -105.0 | Chihuahua, MX | Papahanaumokuakea |
+| -100.0 | Texas | Papahanaumokuakea |
+| -95.0 | (Gulf) | Papahanaumokuakea |
+| -90.0 | (Gulf) | Papahanaumokuakea |
+| -85.0 | (Gulf) | Papahanaumokuakea |
+| -81.0 | Florida | Papahanaumokuakea |
+
+9 of 9. The match is a function of latitude alone.
 
 ---
 
