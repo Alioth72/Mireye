@@ -732,19 +732,50 @@ same — no event id needed.
 
 ## 9. Risk register
 
-**R1 — Seattle may not discriminate physically. Highest severity; lands on Phase 2.**
-Phase 3's winning story is *"we stayed quiet on non-buildable ground."* That requires
-monitored sites whose physical fields actually diverge. Seattle city limits is dense and
-urban: near-universal fiber, short substation distances, little wetland, almost nothing
-protected. If every site scores high optionality, Phase 3 never emits a `quiet` and the one
-thing separating this product from a keyword feed never appears on stage. Seattle does have
-real variation — Duwamish floodplain, West Seattle and Magnolia steep slopes — so this is
-testable rather than fatal. **Mitigation:** build step 7 registers 8 deliberately spread
-Seattle coordinates and pulls the optionality bundles, ~150 credits, one afternoon. It is
-scheduled early precisely because it is the only step that can invalidate the demo premise.
-If the scores do not separate, add King County for rural ground with genuine
-transmission-versus-terrain tension; Build Brief II permits "a county, a town, or a single
-address", so widening is not a scope violation.
+**R1 — RESOLVED 2026-08-23. Seattle discriminates physically.** *(was: highest severity)*
+Phase 3's differentiator is *"we stayed quiet on non-buildable ground,"* which requires
+monitored sites whose physical fields actually diverge. The concern was that Seattle city
+limits — dense, urban, near-universal fiber, short substation distances — would score every
+site high, so Phase 3 could never emit a `quiet`.
+
+**Measured, not assumed.** `scripts/spread_test.py` scored 8 Seattle coordinates plus 2
+rural King County controls on `data_center_optionality`:
+
+| Site | Score | Driver |
+|---|---|---|
+| Duwamish industrial | 1.000 | 230 kV @ 2.7 km, slope 1.5° |
+| South Park | 1.000 | 230 kV @ 2.0 km, slope 0.5° |
+| Georgetown industrial | 1.000 | 230 kV @ 1.8 km, slope 1.8° |
+| Northgate | 0.922 | 115 kV, flat |
+| *Rural KC — Duvall* | *0.922* | *115 kV @ 1.6 km, slope 3.8°* |
+| *Rural KC — Enumclaw* | *0.922* | *115 kV @ 0.3 km, slope 2.5°* |
+| Downtown Seattle | 0.709 | slope 12.6° |
+| West Seattle bluff | 0.224 | **no transmission reported** |
+| Magnolia bluff | 0.208 | **no transmission**, slope 9.3° |
+| Interbay | 0.046 | **intersects_protected_area = True** |
+
+Seattle spread **0.954**, stdev **0.385**. Every value `status: ok` from a named source
+(EIA_POWER, PAD_US, FEMA_NFHL, USFWS_NWI) — the separation is real geography, not a data
+artifact.
+
+**Three consequences worth carrying forward:**
+
+1. **`quiet` arises three different ways** — protected land (Interbay), absent transmission
+   (both bluffs), and steep slope (downtown). Phase 3 has genuine material variety to
+   demonstrate, not one contrived case.
+2. **D7 is load-bearing, and this proves it.** Both bluff sites score low because
+   `nearest_transmission_line_voltage_kv` returns `absent` — a real "nothing here" scoring
+   0.05 — whereas an unfetched field scores 0.5. Collapsing `absent` into missing would flip
+   both from quiet to alert. This is the concrete cost of the ask in section 8.
+3. **The King County mitigation is unnecessary.** Rural controls scored 0.922, *above*
+   downtown Seattle's 0.709 — flat rural land with 115 kV beats a 12.6° urban slope.
+   Seattle has more internal variation than the surrounding county, so widening adds cost
+   without adding discrimination. Recommend staying with Seattle.
+
+**Residual weakness — ceiling effect.** Three of eight sites scored exactly 1.000. The
+metric saturates and cannot distinguish "good" from "excellent". Harmless for alert/quiet,
+where low-end separation is what matters, but **Phase 3 must not read differences near the
+top as meaningful** — 1.000 vs 0.922 is noise, 0.922 vs 0.046 is signal.
 
 **R2 — Auto-fetch with no budget gate has no backstop against a runaway loop.** Consequence
 of D5. Mitigations are in-flight deduplication, the D8 negative cache, and a loud log on
@@ -779,17 +810,17 @@ leaked and the D6 credit story stops being provable.
 | 1 · Catalog mirror, `/v1/quote`, `/v1/budget` | **done** | 0 |
 | 2 · Datapoint store: tri-state, TTL, never-cache-a-failure | **done** | 0 |
 | 3 · Bundle definitions + parcel-trap lint | **done** | 0 |
-| 4 · Site registry + geocode + `boundaries` | blocked on `MIREYE_API_TOKEN` for live calls | 5/site |
-| 5 · Fetch orchestrator (quote → fetch → normalize → store → log) | next | ~19 |
-| 6 · Bundle endpoints with cache-miss auto-fetch + in-flight dedup | next | 0 |
-| 7 · **Seattle spread test, 8 coordinates** | de-risks R1 | ~150 |
-| 8 · Derived scores + profile override | pending | 0 |
-| 9 · Raw field escape hatch + `/v1/fetch-log` | pending | 0 |
+| 4 · Site registry + geocode + `boundaries` | **done, live-verified** | — |
+| 5 · Fetch orchestrator (quote → fetch → verify → store → log) | **done, live-verified** | — |
+| 6 · Bundle endpoints with cache-miss auto-fetch + in-flight dedup | **done, live-verified** | — |
+| 7 · **Seattle spread test, 8 coordinates + 2 controls** | **done — R1 resolved, spread 0.954** | — |
+| 8 · Derived scores + profile override + `/v1/score-profiles` | **done** | — |
+| 9 · Raw field escape hatch + `/v1/fetch-log` | **done** | — |
 
 Steps 5 and 6 are the ones Phase 3 actually calls. They are buildable and testable against
 mocked transports; the token is only required for live calls and for step 7.
 
-**Test suite:** 50 tests. 15 cover the parcel trap and bundle shape; 17 cover tri-state
+**Test suite:** 67 tests. 15 cover the parcel trap and bundle shape; 17 cover tri-state
 status, TTL freshness, negative caching, and provenance. Run:
 `.venv/Scripts/python.exe -m pytest tests -q`
 
