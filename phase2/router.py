@@ -684,6 +684,44 @@ def list_profiles(session: Session = Depends(get_session)) -> dict[str, Any]:
 
 
 # --------------------------------------------------------------------------
+# agentic investigation
+# --------------------------------------------------------------------------
+class InvestigateRequest(BaseModel):
+    goal: str = "data_center_optionality"
+    verify: bool = True
+    analyse: bool = True
+    max_rounds: int = 2
+
+
+@router.post("/sites/{site_id}/investigate", tags=["agents"])
+async def investigate(
+    site_id: str,
+    body: InvestigateRequest,
+    session: Session = Depends(get_session),
+    client: MireyeClient = Depends(get_client),
+) -> dict[str, Any]:
+    """Run the agent hierarchy over a site.
+
+    Scout plans, Executor fetches and scores deterministically, Scout proposes the
+    follow-ups the first answers imply, Verifier challenges extremes against Mireye's
+    synthesizer, Analyst says what is decisive and what is uncertain.
+
+    The response carries the full `trace`: every action, its rationale, and which model
+    (if any) was involved. An investigation nobody can read back is a guess.
+    """
+    from .agents import Coordinator
+
+    if body.goal not in scoring.METRICS:
+        raise HTTPException(404, {"error": "unknown_metric", "message": body.goal})
+    site = _get_site(session, site_id)
+    inv = await Coordinator(session, client).investigate(
+        site, goal=body.goal, verify=body.verify, analyse=body.analyse,
+        max_rounds=body.max_rounds,
+    )
+    return inv.to_dict()
+
+
+# --------------------------------------------------------------------------
 # narrative cross-check
 # --------------------------------------------------------------------------
 class VerifyRequest(BaseModel):

@@ -34,13 +34,18 @@ def _now() -> datetime:
 class Budget:
     """Hard ceilings. An agent that exhausts its budget stops; it does not ask twice."""
 
-    max_steps: int = 8
+    # A full run with two adaptive rounds records roughly: begin, plan, scan, score,
+    # (scout, top-up, score) x rounds, verify, analyse, end. The default must cover
+    # that or the cap fires on bookkeeping rather than on real work -- an earlier
+    # value of 8 overran to 9/8 on an ordinary two-round investigation.
+    max_steps: int = 16
     max_fetches: int = 4
     max_model_calls: int = 6
 
     steps_used: int = 0
     fetches_used: int = 0
     model_calls_used: int = 0
+    overruns: list = field(default_factory=list)
 
     def can_step(self) -> bool:
         return self.steps_used < self.max_steps
@@ -51,12 +56,25 @@ class Budget:
     def can_call_model(self) -> bool:
         return self.model_calls_used < self.max_model_calls
 
+    def note_overrun(self, kind: str) -> None:
+        """Record a ceiling being crossed rather than crossing it silently.
+
+        Terminal bookkeeping (a coordinator's final `end` record) still has to be
+        written even when the budget is spent, so the honest thing is to mark it, not
+        to drop the record or pretend the cap held.
+        """
+        if kind not in self.overruns:
+            self.overruns.append(kind)
+
     def summary(self) -> dict:
-        return {
+        out = {
             "steps": f"{self.steps_used}/{self.max_steps}",
             "fetches": f"{self.fetches_used}/{self.max_fetches}",
             "model_calls": f"{self.model_calls_used}/{self.max_model_calls}",
         }
+        if self.overruns:
+            out["overruns"] = self.overruns
+        return out
 
 
 @dataclass
@@ -110,8 +128,12 @@ class Investigation:
                     model=model, result=result)
         self.steps.append(step)
         self.budget.steps_used += 1
+        if self.budget.steps_used > self.budget.max_steps:
+            self.budget.note_overrun("steps")
         if model:
             self.budget.model_calls_used += 1
+            if self.budget.model_calls_used > self.budget.max_model_calls:
+                self.budget.note_overrun("model_calls")
         return step
 
     def note(self, text: str) -> None:

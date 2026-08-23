@@ -406,6 +406,64 @@ def _access(r: _Reader, th: dict) -> Component:
                      f"major road {float(dist) / 1000:.1f} km", r.used, r.missing)
 
 
+#: PAD-US records that are known to be defective upstream. See
+#: Plan/mireye-bug-report-padus-latitude-band.md -- the Papahanaumokuakea polygon matches
+#: every coordinate between ~25.3N and ~31.6N regardless of longitude, wrongly flagging
+#: Houston, New Orleans, Jacksonville, Tampa, Mobile, Baton Rouge, Corpus Christi, Miami
+#: and San Antonio as GAP-2 conservation land 4,400-5,550 miles from the actual monument.
+#:
+#: This is a WORKAROUND for a vendor defect, not a modelling decision. Remove it once
+#: Mireye confirms a fix, and re-run the calibration export afterwards -- a quarantined
+#: record still costs signal, it just costs less than a wrong one.
+KNOWN_DEFECTIVE_PROTECTED_RECORDS: dict = {
+    "papahanaumokuakea": "HI",   # substring -> the only state it can legitimately match
+}
+
+
+def protected_record_trustworthy(r: _Reader) -> tuple:
+    """Is this PAD-US record internally consistent? Returns (trusted, reason).
+
+    Two independent checks, both generic apart from the named-defect quarantine:
+
+    1. **Known-defective record outside its own state.** Cheap, exact, and removable.
+    2. **Self-contradiction.** A GAP 1/2 conservation unit does not contain developed
+       land at suburban housing density, and is not managed by a federal conservation
+       agency while the surface-management agency reads `private_or_unknown`. Those
+       combinations refute themselves without needing to know anything about Hawaii, so
+       this check keeps working for defects we have not seen yet.
+    """
+    name, _ = r.get("protected_area_name")
+    if not name:
+        return True, ""
+
+    lowered = str(name).casefold()
+    region, _ = r.get("political_region")
+    for needle, only_in in KNOWN_DEFECTIVE_PROTECTED_RECORDS.items():
+        if needle in lowered and region and str(region).upper() not in (only_in, "HAWAII"):
+            return False, (
+                f"'{name}' reported in {region} -- known upstream PAD-US defect "
+                f"(latitude-band match); record quarantined"
+            )
+
+    gap, _ = r.get("protected_area_gap_status")
+    strict = gap is not None and int(gap) <= 2
+    land, _ = r.get("land_use_class")
+    density, _ = r.get("housing_units_density_per_km2")
+    agency, _ = r.get("surface_management_agency")
+
+    if strict and str(land).lower() == "developed" and density is not None             and float(density) > 200:
+        return False, (
+            f"GAP {int(gap)} conservation unit reported on Developed land at "
+            f"{float(density):.0f} homes/km2 -- self-contradictory, record distrusted"
+        )
+    if strict and agency and str(agency).lower() == "private_or_unknown":
+        return False, (
+            f"GAP {int(gap)} federal conservation unit reported where surface "
+            f"management is '{agency}' -- self-contradictory, record distrusted"
+        )
+    return True, ""
+
+
 def _clear(r: _Reader, th: dict) -> Component:
     """Hard constraints, applied as a direct multiplier.
 
@@ -422,6 +480,14 @@ def _clear(r: _Reader, th: dict) -> Component:
     protected, prot_present = r.get("intersects_protected_area")
     gap, _ = r.get("protected_area_gap_status")
     name, _ = r.get("protected_area_name")
+
+    trusted, distrust_reason = protected_record_trustworthy(r)
+    if protected and not trusted:
+        # Do NOT silently drop the penalty -- say why, loudly, so the reason travels
+        # into the alert and nobody mistakes this for clean ground.
+        notes.append(f"protected-area record IGNORED: {distrust_reason}")
+        protected = False
+
     if protected:
         if gap is not None:
             penalty = th["gap_penalties"].get(str(int(gap)), th["gap_default"])
@@ -829,7 +895,11 @@ _PER_COMPONENT = {
     "cost": ["avg_retail_electricity_price_industrial_usd_per_kwh"],
     "access": ["nearest_major_road_distance_m"],
     "clear": ["intersects_protected_area", "protected_area_gap_status", "protected_area_name",
-              "within_floodplain_polygon", "intersects_wetland", "in_air_quality_nonattainment"],
+              "within_floodplain_polygon", "intersects_wetland", "in_air_quality_nonattainment",
+              # plausibility inputs -- a protected-area record that contradicts the land
+              # around it is not trustworthy; see protected_record_trustworthy()
+              "political_region", "land_use_class", "housing_units_density_per_km2",
+              "surface_management_agency"],
     "legacy": ["near_epa_repowering_site", "nearest_repowering_site_distance_m",
                "nearest_brownfield_distance_m", "nearest_power_plant_distance_m",
                "nearest_power_plant_primary_fuel", "nearest_power_plant_capacity_mw"],
