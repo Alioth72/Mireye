@@ -732,50 +732,64 @@ same — no event id needed.
 
 ## 9. Risk register
 
-**R1 — RESOLVED 2026-08-23. Seattle discriminates physically.** *(was: highest severity)*
+**R1 — REOPENED 2026-08-24. Seattle does NOT discriminate physically.**
+*(This entry previously read "RESOLVED — spread 0.954". That conclusion was wrong and is
+retracted. It rested on point-sampled data, and all three of its `quiet` cases turned out
+to be measurement errors.)*
+
 Phase 3's differentiator is *"we stayed quiet on non-buildable ground,"* which requires
-monitored sites whose physical fields actually diverge. The concern was that Seattle city
-limits — dense, urban, near-universal fiber, short substation distances — would score every
-site high, so Phase 3 could never emit a `quiet`.
+monitored sites whose physical fields actually diverge.
 
-**Measured, not assumed.** `scripts/spread_test.py` scored 8 Seattle coordinates plus 2
-rural King County controls on `data_center_optionality`:
+**What the first run claimed, and why it was wrong.** Ten sites, one coordinate each,
+spread 0.954, three quiet cases. Re-measured with vicinity sampling, every quiet case
+evaporated:
 
-| Site | Score | Driver |
-|---|---|---|
-| Duwamish industrial | 1.000 | 230 kV @ 2.7 km, slope 1.5° |
-| South Park | 1.000 | 230 kV @ 2.0 km, slope 0.5° |
-| Georgetown industrial | 1.000 | 230 kV @ 1.8 km, slope 1.8° |
-| Northgate | 0.922 | 115 kV, flat |
-| *Rural KC — Duvall* | *0.922* | *115 kV @ 1.6 km, slope 3.8°* |
-| *Rural KC — Enumclaw* | *0.922* | *115 kV @ 0.3 km, slope 2.5°* |
-| Downtown Seattle | 0.709 | slope 12.6° |
-| West Seattle bluff | 0.224 | **no transmission reported** |
-| Magnolia bluff | 0.208 | **no transmission**, slope 9.3° |
-| Interbay | 0.046 | **intersects_protected_area = True** |
+| Site | point | vicinity | why it was wrong |
+|---|---|---|---|
+| West Seattle bluff | 0.224 | **0.911** | 230 kV at 1.3 km; centroid `absent` was a search-radius artefact |
+| Magnolia bluff | 0.208 | **0.830** | same artefact |
+| Interbay | 0.046 | **0.830** | GAP-4 municipal golf course scored as disqualifying |
 
-Seattle spread **0.954**, stdev **0.385**. Every value `status: ok` from a named source
-(EIA_POWER, PAD_US, FEMA_NFHL, USFWS_NWI) — the separation is real geography, not a data
-artifact.
+**Both metrics fail on corrected data:**
 
-**Three consequences worth carrying forward:**
+| Metric | Seattle spread | stdev | quiet cases |
+|---|---|---|---|
+| `data_center_optionality` | **0.090** | 0.039 | 0 |
+| `energy_park_optionality` | **0.192** | 0.067 | 0 |
 
-1. **`quiet` arises three different ways** — protected land (Interbay), absent transmission
-   (both bluffs), and steep slope (downtown). Phase 3 has genuine material variety to
-   demonstrate, not one contrived case.
-2. **D7 is load-bearing, and this proves it.** Both bluff sites score low because
-   `nearest_transmission_line_voltage_kv` returns `absent` — a real "nothing here" scoring
-   0.05 — whereas an unfetched field scores 0.5. Collapsing `absent` into missing would flip
-   both from quiet to alert. This is the concrete cost of the ask in section 8.
-3. **The King County mitigation is unnecessary.** Rural controls scored 0.922, *above*
-   downtown Seattle's 0.709 — flat rural land with 115 kV beats a 12.6° urban slope.
-   Seattle has more internal variation than the surrounding county, so widening adds cost
-   without adding discrimination. Recommend staying with Seattle.
+The bar is 0.30. Neither clears it.
 
-**Residual weakness — ceiling effect.** Three of eight sites scored exactly 1.000. The
-metric saturates and cannot distinguish "good" from "excellent". Harmless for alert/quiet,
-where low-end separation is what matters, but **Phase 3 must not read differences near the
-top as meaningful** — 1.000 vs 0.922 is noise, 0.922 vs 0.046 is signal.
+**Why.** Every parcel inside Seattle city limits sits within ~2 km of 115-230 kV
+transmission, has fibre, municipal water, and buildable ground somewhere within 1.5 km.
+That is what a dense American city is. `nearest_*` fields cannot separate sites whose
+surroundings are uniformly well served.
+
+**The King County mitigation also fails** -- rural controls scored 0.829-0.890 on
+`data_center_optionality`, inside the same band. Widening the geography does not help.
+
+**What the component columns do show:**
+
+* `isolation` is the only component with real range (0.15 to 0.67) and carries the whole
+  `energy_park` spread. Centralia WA, a genuinely remote retired-coal site, scores 0.84
+  on it -- so the component works, and the ten test sites all sit in one metro.
+* `btm_fuel` is uniformly depressed (0.14-0.30) rather than discriminating. Alpine Lakes
+  and Mount Rainier are both inside the ~300 km PSD screening radius, so the Class I gate
+  fires everywhere in western Washington. A regional constant, not a signal.
+* `legacy`, `clear` and `fire_siting` sit pinned at 1.00 across all ten sites.
+
+**Explicitly NOT done:** no ring was shrunk and no band retuned to manufacture a spread.
+Fitting the measurement to the desired answer is what produced the retracted PASS.
+
+**Open question for the team.** Two readings remain live, and they imply different things:
+
+1. *The test fixture is unrepresentative.* Ten sites in one metro cluster regardless of
+   scoring quality. Re-running with genuinely spread sites would settle it.
+2. *Physical optionality is not the differentiator in Seattle,* and Phase 3's `quiet` must
+   come from **scope** -- events that do not reach the site -- rather than from physics.
+
+If (2) holds, Phase 2 still does real work: it explains *why* land is or is not in play and
+supplies the evidence and citations. But it stops being the thing that produces silence,
+and Phase 3 should know that before building its alert policy around it.
 
 **R2 — Auto-fetch with no budget gate has no backstop against a runaway loop.** Consequence
 of D5. Mitigations are in-flight deduplication, the D8 negative cache, and a loud log on
@@ -813,7 +827,7 @@ leaked and the D6 credit story stops being provable.
 | 4 · Site registry + geocode + `boundaries` | **done, live-verified** | — |
 | 5 · Fetch orchestrator (quote → fetch → verify → store → log) | **done, live-verified** | — |
 | 6 · Bundle endpoints with cache-miss auto-fetch + in-flight dedup | **done, live-verified** | — |
-| 7 · **Seattle spread test, 8 coordinates + 2 controls** | **done — R1 resolved, spread 0.954** | — |
+| 7 · **Seattle spread test, 8 coordinates + 2 controls** | **done — R1 REOPENED, see risk register** | — |
 | 8 · Derived scores + profile override + `/v1/score-profiles` | **done** | — |
 | 9 · Raw field escape hatch + `/v1/fetch-log` | **done** | — |
 
