@@ -136,6 +136,40 @@ BUNDLES: MappingProxyType[str, tuple[str, ...]] = MappingProxyType(
             "housing_units_density_per_km2",
             "nearest_urban_area_distance_m",
         ),
+        # Legacy industrial infrastructure -- the strongest real-world signal for a
+        # data-centre + BESS energy park. Retired coal plants and brownfields carry
+        # existing substations, transmission corridors, legacy interconnection queue
+        # position, historic water allocations and industrial zoning, with less
+        # community pushback than greenfield. (PNNL coal-to-data-centre; EPA reuse
+        # considerations; FAS adaptive reuse of legacy coal.)
+        "energy_park": (
+            "near_epa_repowering_site",
+            "nearest_repowering_site_distance_m",
+            "nearest_brownfield_distance_m",
+            "nearest_power_plant_distance_m",
+            "nearest_power_plant_primary_fuel",
+            "nearest_power_plant_capacity_mw",
+            "transmission_redundancy_flag",
+        ),
+        # Behind-the-meter fuel. BTM generation is ~30% of planned US data-centre
+        # capacity and gas turbines are ~75% of it, because grid interconnection in
+        # primary hubs now exceeds four years. Mireye ships a literal candidacy flag.
+        "btm_fuel": (
+            "btm_gas_candidacy_flag",
+            "nearest_gas_pipeline_distance_m",
+            "nearest_interstate_gas_pipeline_distance_m",
+            "modeled_onsite_gas_generation_cost_usd_per_mwh",
+            "natural_gas_industrial_price_usd_per_mcf",
+        ),
+        # Land character: is this already-disturbed industrial ground, or intact
+        # habitat? Also drives BESS fire siting -- NFPA 855 / IFC 1207.5.7 require
+        # combustible-vegetation clearance around pad-mounted units.
+        "land_character": (
+            "land_use_class",
+            "tree_canopy_pct",
+            "prime_farmland_classification",
+            "wildfire_annual_frequency",
+        ),
         # Pulled once at site registration. Phase 3 uses these for scope resolution.
         "boundaries": (
             "political_region",

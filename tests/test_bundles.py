@@ -103,6 +103,9 @@ EXPECTED_CREDITS = {
     "airquality": 3,
     "climate": 3,
     "market": 4,
+    "energy_park": 7,
+    "btm_fuel": 5,
+    "land_character": 4,
     "boundaries": 4,
 }
 

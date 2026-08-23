@@ -294,6 +294,158 @@ def _clear(r: _Reader, th: dict) -> Component:
                      r.used, r.missing)
 
 
+
+def _legacy(r: _Reader, th: dict) -> Component:
+    """Legacy industrial infrastructure — the strongest real-world energy-park signal.
+
+    Retired coal plants and brownfields are the sites the industry is actually
+    converting, because they carry existing substations and transmission corridors,
+    legacy interconnection position, historic water allocations, industrial zoning
+    already in place, and materially less community pushback than greenfield.
+    """
+    fuel, _ = r.get("nearest_power_plant_primary_fuel")
+    plant_d, _ = r.get("nearest_power_plant_distance_m")
+    capacity, _ = r.get("nearest_power_plant_capacity_mw")
+    repower, repower_present = r.get("near_epa_repowering_site")
+    repower_d, _ = r.get("nearest_repowering_site_distance_m")
+    brown_d, _ = r.get("nearest_brownfield_distance_m")
+
+    sc, notes = th["legacy_base"], []
+
+    if fuel and plant_d is not None:
+        prox = _decay(float(plant_d), th["plant_full_m"], th["plant_zero_m"])
+        heavy = str(fuel).lower() in th["heavy_interconnect_fuels"]
+        big = capacity is not None and float(capacity) >= th["plant_capacity_mw_floor"]
+        if heavy and prox > 0:
+            sc = max(sc, th["legacy_base"] + (1 - th["legacy_base"]) * prox * (1.0 if big else 0.7))
+            notes.append(
+                f"{fuel} plant {float(plant_d)/1000:.1f} km"
+                + (f", {float(capacity):.0f} MW" if capacity is not None else "")
+            )
+
+    if repower:
+        sc = max(sc, th["repowering_onsite"])
+        notes.append("EPA RE-Powering site")
+    elif repower_d is not None:
+        sc = max(sc, th["legacy_base"] + (th["repowering_onsite"] - th["legacy_base"])
+                 * _decay(float(repower_d), th["repower_full_m"], th["repower_zero_m"]))
+        notes.append(f"repowering site {float(repower_d)/1000:.1f} km")
+
+    if brown_d is not None:
+        sc = max(sc, th["legacy_base"] + (1 - th["legacy_base"])
+                 * _decay(float(brown_d), th["brownfield_full_m"], th["brownfield_zero_m"]))
+        notes.append(f"brownfield {float(brown_d)/1000:.1f} km")
+
+    if not notes and not repower_present:
+        return Component(0.5, "legacy infrastructure not fetched", r.used, r.missing)
+    return Component(min(sc, 1.0), "; ".join(notes) or "no legacy industrial site nearby",
+                     r.used, r.missing)
+
+
+def _isolation(r: _Reader, th: dict) -> Component:
+    """Distance from settlement. Higher isolation scores HIGHER.
+
+    Inverted relative to every other component: an energy park wants to be away from
+    people. `housing_units_within_1km` is Mireye's community-pushback exposure proxy.
+    """
+    density, present = r.get("housing_units_density_per_km2")
+    urban_d, _ = r.get("nearest_urban_area_distance_m")
+    if density is None and urban_d is None:
+        return Component(0.5, "settlement context not fetched", r.used, r.missing)
+
+    sc, notes = 1.0, []
+    if density is not None:
+        sc = _inverse_band(float(density), th["housing_density_bands"])
+        notes.append(f"{float(density):.1f} homes/km2")
+    if urban_d is not None:
+        sc = min(1.0, sc * (th["urban_floor"] + (1 - th["urban_floor"])
+                            * _band(float(urban_d), th["urban_distance_bands"])))
+        notes.append(f"urban area {float(urban_d)/1000:.1f} km")
+    return Component(sc, ", ".join(notes), r.used, r.missing)
+
+
+def _low_disturbance(r: _Reader, th: dict) -> Component:
+    """Prefer already-disturbed ground; penalise intact habitat and prime farmland.
+
+    The goal is remote-but-not-pristine: away from people, without pushing an
+    industrial footprint into forest, wetland or critical habitat.
+    """
+    land, present = r.get("land_use_class")
+    canopy, _ = r.get("tree_canopy_pct")
+    farmland, _ = r.get("prime_farmland_classification")
+    habitat, _ = r.get("intersects_critical_habitat")
+
+    if land is None and canopy is None:
+        return Component(0.5, "land character not fetched", r.used, r.missing)
+
+    sc, notes = 1.0, []
+    if land is not None:
+        key = str(land).lower()
+        sc *= th["land_use_scores"].get(key, th["land_use_default"])
+        notes.append(str(land))
+    if canopy is not None:
+        sc *= _inverse_band(float(canopy), th["canopy_bands"])
+        notes.append(f"{float(canopy):.0f}% canopy")
+    # Prime-farmland classification describes SOIL capability, not current use --
+    # downtown Seattle reports prime farmland soil under pavement. Only penalise it
+    # where the land is actually undeveloped and could still be farmed.
+    developed = land is not None and str(land).lower() in th["developed_land_classes"]
+    if farmland and "not prime" not in str(farmland).lower() and not developed:
+        sc *= th["prime_farmland_penalty"]
+        notes.append("prime farmland soil")
+    if habitat:
+        sc *= th["critical_habitat_penalty"]
+        notes.append("critical habitat")
+    return Component(max(sc, 0.0), ", ".join(notes), r.used, r.missing)
+
+
+def _btm_fuel(r: _Reader, th: dict) -> Component:
+    """Behind-the-meter fuel access.
+
+    BTM generation is roughly 30% of planned US data-centre capacity, and gas turbines
+    are ~75% of that, because grid interconnection in primary hubs now exceeds four
+    years. Mireye ships `btm_gas_candidacy_flag` directly.
+    """
+    flag, present = r.get("btm_gas_candidacy_flag")
+    pipe_d, _ = r.get("nearest_gas_pipeline_distance_m")
+    cost, _ = r.get("modeled_onsite_gas_generation_cost_usd_per_mwh")
+
+    if not present and pipe_d is None:
+        return Component(0.5, "BTM fuel not fetched", r.used, r.missing)
+
+    sc, notes = (th["btm_flagged"] if flag else th["btm_unflagged"]), []
+    notes.append(f"btm_gas_candidate={flag}")
+    if pipe_d is not None:
+        sc *= (th["pipeline_floor"] + (1 - th["pipeline_floor"])
+               * _decay(float(pipe_d), th["pipeline_full_m"], th["pipeline_zero_m"]))
+        notes.append(f"gas pipeline {float(pipe_d)/1000:.1f} km")
+    if cost is not None:
+        sc *= _inverse_band(float(cost), th["onsite_gen_cost_bands"])
+        notes.append(f"${float(cost):.0f}/MWh onsite")
+    return Component(min(sc, 1.0), ", ".join(notes), r.used, r.missing)
+
+
+def _fire_siting(r: _Reader, th: dict) -> Component:
+    """BESS fire-siting penalty.
+
+    NFPA 855 and IFC 1207.5.7 require combustible-vegetation clearance around
+    pad-mounted BESS, and heavy canopy plus wildfire exposure raises siting cost and
+    permitting friction. Applied as a penalty multiplier.
+    """
+    fire, present = r.get("wildfire_annual_frequency")
+    canopy, _ = r.get("tree_canopy_pct")
+    if fire is None and canopy is None:
+        return Component(1.0, "fire exposure not fetched", r.used, r.missing)
+    sc, notes = 1.0, []
+    if fire is not None:
+        sc *= _inverse_band(float(fire), th["wildfire_bands"])
+        notes.append(f"wildfire freq {float(fire):.4f}")
+    if canopy is not None and float(canopy) >= th["canopy_fire_threshold_pct"]:
+        sc *= th["canopy_fire_penalty"]
+        notes.append(f"{float(canopy):.0f}% canopy near BESS")
+    return Component(sc, ", ".join(notes) or "no elevated fire exposure", r.used, r.missing)
+
+
 COMPONENTS: dict[str, Callable[[_Reader, dict], Component]] = {
     "power": _power,
     "interconnect": _interconnect,
@@ -302,7 +454,12 @@ COMPONENTS: dict[str, Callable[[_Reader, dict], Component]] = {
     "water": _water,
     "cost": _cost,
     "access": _access,
+    "legacy": _legacy,
+    "isolation": _isolation,
+    "low_disturbance": _low_disturbance,
+    "btm_fuel": _btm_fuel,
     "clear": _clear,
+    "fire_siting": _fire_siting,
 }
 
 # ---------------------------------------------------------------------------
@@ -346,6 +503,45 @@ DEFAULT_THRESHOLDS: dict[str, Any] = {
     "road_full_m": 1500,
     "road_zero_m": 15000,
     "road_absent": 0.2,
+
+    # --- energy park -------------------------------------------------------
+    # Retired coal/gas plants carry substations, corridors and legacy queue position.
+    "legacy_base": 0.35,
+    "heavy_interconnect_fuels": ["coal", "natural gas", "gas", "petroleum", "nuclear"],
+    "plant_capacity_mw_floor": 200,
+    "plant_full_m": 3000,
+    "plant_zero_m": 25000,
+    "repowering_onsite": 0.95,
+    "repower_full_m": 2000,
+    "repower_zero_m": 20000,
+    "brownfield_full_m": 2000,
+    "brownfield_zero_m": 20000,
+    # Isolation is INVERTED: fewer homes nearby scores higher.
+    "housing_density_bands": [(2, 1.0), (10, 0.9), (50, 0.7), (200, 0.45), (1e9, 0.2)],
+    "urban_distance_bands": [(20000, 1.0), (8000, 0.85), (3000, 0.6), (0, 0.35)],
+    "urban_floor": 0.6,
+    # Remote but not pristine: already-disturbed ground is preferred.
+    "land_use_scores": {
+        "developed": 1.0, "barren": 0.95, "shrubland": 0.85, "grassland": 0.8,
+        "cropland": 0.7, "agriculture": 0.7, "forest": 0.45, "wetland": 0.15,
+        "water": 0.05, "snow/ice": 0.1,
+    },
+    "land_use_default": 0.7,
+    "canopy_bands": [(10, 1.0), (30, 0.85), (60, 0.6), (100, 0.4)],
+    "prime_farmland_penalty": 0.7,
+    "developed_land_classes": ["developed", "barren", "urban"],
+    "critical_habitat_penalty": 0.2,
+    # Behind-the-meter fuel.
+    "btm_flagged": 1.0,
+    "btm_unflagged": 0.45,
+    "pipeline_full_m": 3000,
+    "pipeline_zero_m": 30000,
+    "pipeline_floor": 0.4,
+    "onsite_gen_cost_bands": [(80, 1.0), (110, 0.9), (140, 0.75), (200, 0.5), (1e9, 0.3)],
+    # NFPA 855 / IFC 1207.5.7 combustible-vegetation clearance around pad-mounted BESS.
+    "wildfire_bands": [(0.001, 1.0), (0.01, 0.9), (0.05, 0.7), (1e9, 0.5)],
+    "canopy_fire_threshold_pct": 40,
+    "canopy_fire_penalty": 0.85,
 }
 
 #: metric -> GRADED component weights (weighted geometric mean). PROVISIONAL.
@@ -358,7 +554,18 @@ DEFAULT_WEIGHTS: dict[str, dict[str, float]] = {
     # evaporative-cooling climate -- it is a price-arbitrage asset, so cost matters.
     "bess_optionality": {"power": 0.60, "terrain": 0.25, "cost": 0.15},
     "buildability": {"terrain": 0.55, "access": 0.30, "water": 0.15},
+    # Can this ground host a co-located data-centre + BESS energy park?
+    # Encodes the observed industry pattern: legacy industrial land with inherited
+    # grid infrastructure, away from settlement, on already-disturbed ground, with a
+    # behind-the-meter fuel option to bridge multi-year interconnection queues.
+    "energy_park_optionality": {
+        "power": 0.25, "legacy": 0.20, "isolation": 0.15,
+        "low_disturbance": 0.15, "btm_fuel": 0.15, "terrain": 0.10,
+    },
 }
+
+#: metrics whose penalty set differs from the default
+METRIC_PENALTIES: dict = {"energy_park_optionality": ("clear", "fire_siting")}
 
 #: applied as a direct multiplier after the weighted mean, for every metric
 PENALTY_COMPONENTS: tuple = ("clear",)
@@ -377,12 +584,25 @@ _PER_COMPONENT = {
     "access": ["nearest_major_road_distance_m"],
     "clear": ["intersects_protected_area", "protected_area_gap_status", "protected_area_name",
               "within_floodplain_polygon", "intersects_wetland", "in_air_quality_nonattainment"],
+    "legacy": ["near_epa_repowering_site", "nearest_repowering_site_distance_m",
+               "nearest_brownfield_distance_m", "nearest_power_plant_distance_m",
+               "nearest_power_plant_primary_fuel", "nearest_power_plant_capacity_mw"],
+    "isolation": ["housing_units_density_per_km2", "nearest_urban_area_distance_m"],
+    "low_disturbance": ["land_use_class", "tree_canopy_pct",
+                        "prime_farmland_classification", "intersects_critical_habitat"],
+    "btm_fuel": ["btm_gas_candidacy_flag", "nearest_gas_pipeline_distance_m",
+                 "modeled_onsite_gas_generation_cost_usd_per_mwh"],
+    "fire_siting": ["wildfire_annual_frequency", "tree_canopy_pct"],
 }
+
+
+def penalties_for(metric: str) -> tuple:
+    return METRIC_PENALTIES.get(metric, PENALTY_COMPONENTS)
 
 
 def required_fields(metric: str) -> list:
     out: list = []
-    for component in list(DEFAULT_WEIGHTS[metric]) + list(PENALTY_COMPONENTS):
+    for component in list(DEFAULT_WEIGHTS[metric]) + list(penalties_for(metric)):
         for f in _PER_COMPONENT[component]:
             if f not in out:
                 out.append(f)
@@ -439,7 +659,7 @@ def score(
         missing += comp.fields_missing
         product *= max(comp.score, 0.0) ** (weight / total)
 
-    for name in PENALTY_COMPONENTS:
+    for name in penalties_for(metric):
         r = _Reader(dps)
         comp = COMPONENTS[name](r, th)
         components[name] = {"score": round(comp.score, 4), "weight": None,
