@@ -1,0 +1,112 @@
+"""Build-order step 7 -- the physical discrimination test.
+
+Answers risk R1 in context/phase2.md: *do the physical fields actually diverge across
+monitored sites?*
+
+Phase 3's differentiator is "we stayed quiet on non-buildable ground." That only works
+if optionality scores separate. If every Seattle site scores high, Phase 3 never emits a
+`quiet` and the product is indistinguishable from a keyword feed.
+
+Sites are chosen deliberately for terrain variety, plus two rural King County controls
+so we can see what a genuinely different site looks like.
+
+    .venv/Scripts/python.exe scripts/spread_test.py
+"""
+
+from __future__ import annotations
+
+import asyncio
+import statistics
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from sqlmodel import Session, select  # noqa: E402
+
+from phase2 import scoring  # noqa: E402
+from phase2.db import get_engine, init_db  # noqa: E402
+from phase2.models import Site  # noqa: E402
+from phase2.mireye.client import MireyeClient  # noqa: E402
+from phase2.orchestrator import read_or_fetch  # noqa: E402
+
+SITES: list[tuple[str, float, float]] = [
+    # --- Seattle city limits, chosen for terrain variety ---
+    ("Downtown Seattle",        47.6062, -122.3321),
+    ("Duwamish industrial",     47.5301, -122.3350),
+    ("South Park (floodplain)", 47.5290, -122.3230),
+    ("Georgetown industrial",   47.5450, -122.3200),
+    ("Interbay (rail/flat)",    47.6420, -122.3790),
+    ("West Seattle bluff",      47.5707, -122.3870),
+    ("Magnolia bluff",          47.6500, -122.4020),
+    ("Northgate",               47.7080, -122.3250),
+    # --- rural King County controls ---
+    ("Rural KC — Duvall",       47.7420, -121.9860),
+    ("Rural KC — Enumclaw",     47.2040, -121.9910),
+]
+
+METRIC = "data_center_optionality"
+
+
+async def main() -> None:
+    init_db()
+    engine = get_engine()
+    fields = scoring.required_fields(METRIC)
+    rows: list[tuple[str, dict]] = []
+
+    async with MireyeClient() as client:
+        for label, lat, lng in SITES:
+            with Session(engine) as session:
+                site = session.exec(
+                    select(Site).where(Site.lat == lat, Site.lng == lng)
+                ).first()
+                if site is None:
+                    site = Site(label=label, lat=lat, lng=lng)
+                    session.add(site)
+                    session.commit()
+                    session.refresh(site)
+
+                answers, outcome = await read_or_fetch(
+                    session, client, site, fields, trigger="replay"
+                )
+                result = scoring.score(METRIC, answers)
+                rows.append((label, result))
+                if outcome.error:
+                    print(f"  ! {label}: {outcome.error}", file=sys.stderr)
+
+    # ---- report -----------------------------------------------------------
+    hdr = f"{'site':<26}{'score':>7}  {'power':>6}{'fiber':>7}{'terrain':>9}{'clear':>7}   basis"
+    print(hdr)
+    print("-" * len(hdr))
+    for label, r in sorted(rows, key=lambda x: -x[1]["score"]):
+        c = r["components"]
+        print(
+            f"{label:<26}{r['score']:>7.3f}  "
+            f"{c['power']['score']:>6.2f}{c['fiber']['score']:>7.2f}"
+            f"{c['terrain']['score']:>9.2f}{c['clear']['score']:>7.2f}   "
+            f"{c['power']['basis']}; {c['terrain']['basis']}"
+        )
+
+    scores = [r["score"] for _, r in rows]
+    seattle = [r["score"] for label, r in rows if not label.startswith("Rural")]
+    rural = [r["score"] for label, r in rows if label.startswith("Rural")]
+
+    print()
+    print(f"all sites   n={len(scores):<3} min={min(scores):.3f} max={max(scores):.3f} "
+          f"spread={max(scores) - min(scores):.3f} stdev={statistics.pstdev(scores):.3f}")
+    print(f"Seattle     n={len(seattle):<3} min={min(seattle):.3f} max={max(seattle):.3f} "
+          f"spread={max(seattle) - min(seattle):.3f} stdev={statistics.pstdev(seattle):.3f}")
+    if rural:
+        print(f"rural KC    n={len(rural):<3} min={min(rural):.3f} max={max(rural):.3f}")
+
+    print()
+    verdict = (
+        "PASS -- scores separate; Phase 3 can produce both alert and quiet"
+        if max(seattle) - min(seattle) >= 0.30
+        else "FAIL -- Seattle does not discriminate; widen to King County (R1 mitigation)"
+    )
+    print(f"R1 verdict (Seattle spread >= 0.30): {verdict}")
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
