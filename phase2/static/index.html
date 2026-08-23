@@ -161,7 +161,8 @@ async function loadSites() {
   if (current) showDetail();
 }
 
-const BUNDLES = ["grid", "telecom", "terrain", "water", "constraints", "access", "boundaries"];
+const BUNDLES = ["grid", "telecom", "terrain", "water", "constraints", "access",
+  "airquality", "climate", "market", "energy_park", "btm_fuel", "land_character", "boundaries"];
 
 async function showDetail() {
   const s = sites.find(x => x.id === current);
@@ -169,12 +170,14 @@ async function showDetail() {
   $("#detail").innerHTML = `<h2>${esc(s.label || s.id)}</h2>
     <div class="muted" style="margin-bottom:10px"><code>${s.lat.toFixed(4)}, ${s.lng.toFixed(4)}</code>
       · ${esc(s.boundaries.political_locality || "?")}, ${esc(s.boundaries.political_county || "?")}</div>
-    <div class="tabs">${["score", ...BUNDLES].map(t =>
+    <div class="tabs">${["score", "vicinity", ...BUNDLES].map(t =>
       `<button data-t="${t}" aria-selected="${t === tab}">${t}</button>`).join("")}</div>
     <div id="body"><div class="empty">loading…</div></div>`;
   document.querySelectorAll(".tabs button").forEach(b =>
     b.onclick = () => { tab = b.dataset.t; showDetail(); });
-  tab === "score" ? renderScore(s) : renderBundle(s, tab);
+  if (tab === "score") renderScore(s);
+  else if (tab === "vicinity") renderVicinity(s);
+  else renderBundle(s, tab);
 }
 
 async function renderScore(s) {
@@ -203,6 +206,43 @@ async function renderScore(s) {
       `<div class="note">Graded components combine as a weighted geometric mean, so a zero
        anywhere zeroes the whole score. <code>clear</code> applies as a direct multiplier —
        “you cannot build here” is not a weighted opinion.</div>`;
+  } catch (e) { $("#body").innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+}
+
+async function renderVicinity(s) {
+  try {
+    const r = await j(`/sites/${s.id}/vicinity`);
+    if (!r.field_count) {
+      $("#body").innerHTML = '<div class="empty">no ring scanned yet</div>';
+      return;
+    }
+    const order = ["connectable", "intrinsic", "regional"];
+    const blurb = {
+      connectable: "You <b>reach</b> this infrastructure — you do not own it. " +
+        "Best across the ring is the right answer, and distance is the cost.",
+      intrinsic: "Properties of the ground <b>itself</b>. A flat pad 1.5&nbsp;km away does " +
+        "nothing for a steep parcel, so these show best, worst and the usable fraction.",
+      regional: "Uniform at this scale — centroid only."
+    };
+    $("#body").innerHTML = order.filter(k => r.by_class[k]).map(k => `
+      <div style="margin-bottom:16px">
+        <div class="row" style="justify-content:space-between">
+          <b>${k}</b><span class="muted">${r.by_class[k].length} fields</span>
+        </div>
+        <div class="note" style="margin-top:4px;border:none;padding-top:2px">${blurb[k]}</div>
+        <div class="scroll"><table>
+          <tr><th>field</th><th>best</th><th>worst</th><th>usable</th><th>at</th></tr>
+          ${r.by_class[k].map(f => `<tr>
+            <td><code>${esc(f.field)}</code>${f.coverage_note
+              ? `<br><span style="font-size:11px;color:var(--warn)">${esc(f.coverage_note)}</span>` : ""}</td>
+            <td><b>${esc(fmt(f.best))}</b></td>
+            <td class="muted">${esc(fmt(f.worst))}</td>
+            <td>${f.fraction_usable === null || f.fraction_usable === undefined ? '<span class="muted">—</span>'
+              : `${(f.fraction_usable * 100).toFixed(0)}%`}</td>
+            <td class="muted"><code>${f.best_at_m === null || f.best_at_m === undefined ? "—" : f.best_at_m + "m"}</code></td>
+          </tr>`).join("")}
+        </table></div>
+      </div>`).join("");
   } catch (e) { $("#body").innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
 }
 
