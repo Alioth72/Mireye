@@ -24,10 +24,10 @@ from typing import Optional
 
 from sqlmodel import Session, select
 
-from . import catalog
+from . import catalog, vicinity
 from .bundles import MAX_FIELDS_PER_FETCH, estimate_credits, touches_parcel_record
 from .config import Settings, get_settings
-from .models import Datapoint, FetchLog, Site, utcnow
+from .models import Datapoint, FetchLog, Site, VicinitySample, VicinitySummary, utcnow
 from .mireye.client import MireyeClient
 from .mireye.schemas import MireyeError
 from .store import _aware, read_fields, upsert_records
@@ -230,3 +230,119 @@ async def read_or_fetch(
         )
 
     return read.answers, outcome
+
+
+# ---------------------------------------------------------------------------
+# vicinity scanning
+# ---------------------------------------------------------------------------
+async def scan_vicinity(
+    session: Session,
+    client: MireyeClient,
+    site: Site,
+    fields: list,
+    *,
+    rings: tuple = vicinity.DEFAULT_RINGS,
+    caller_ref: Optional[str] = None,
+) -> dict:
+    """Sample a ring around the site in ONE batch call and store the distribution.
+
+    This is the fix for the error class that produced the West Seattle false quiet:
+    a `nearest_*` field measured at a single centroid can only ever under-report
+    proximity, so absence at one point is a search-radius artefact rather than a fact.
+
+    The centroid result is ALSO written to `p2_datapoint`, so every existing
+    single-point query and the whole scoring path keep working unchanged.
+    """
+    parcel_hits = touches_parcel_record(fields)
+    if parcel_hits:
+        # 25 locations x a parcel field = 25 metered calls. Refuse loudly.
+        return {"error": f"refused: parcel_record group {sorted(parcel_hits)} "
+                         f"would bill per location across the ring"}
+
+    points = vicinity.ring_points(site.lat, site.lng, rings=rings)
+    locations = [{"lat": p.lat, "lng": p.lng} for p in points]
+
+    try:
+        results = await client.fetch_batch(locations, fields)
+    except MireyeError as exc:
+        session.add(FetchLog(site_id=site.id, fields=fields, trigger="vicinity",
+                             caller_ref=caller_ref, ok=False,
+                             error=f"{exc.code}: {exc.message}", request_id=exc.request_id))
+        session.commit()
+        return {"error": f"{exc.code}: {exc.message}"}
+
+    now = utcnow()
+    entry_failures: list = []
+    paired: list = []
+
+    for index, response, error in results:
+        point = points[index] if index < len(points) else None
+        if point is None:
+            continue
+        if error is not None:
+            # Entry-level failure -- the location itself. NOT the same as a field
+            # failing inside a good entry, and never allowed to poison the others.
+            entry_failures.append({"index": index, "ring_m": point.ring_m, **error})
+            continue
+
+        paired.append((point, response.fields))
+        for name, rec in response.fields.items():
+            row = session.exec(
+                select(VicinitySample).where(
+                    VicinitySample.site_id == site.id,
+                    VicinitySample.field_name == name,
+                    VicinitySample.ring_m == point.ring_m,
+                    VicinitySample.bearing_deg == point.bearing_deg,
+                )
+            ).first()
+            if row is None:
+                row = VicinitySample(site_id=site.id, field_name=name,
+                                     ring_m=point.ring_m, bearing_deg=point.bearing_deg,
+                                     lat=point.lat, lng=point.lng, status=rec.status)
+                session.add(row)
+            row.value = rec.value if rec.cacheable else None
+            row.status = rec.status
+            row.source = rec.source
+            row.fetched_at = _aware(rec.fetched_at) or now
+
+        # The centroid doubles as the ordinary single-point record.
+        if point.is_centroid:
+            upsert_records(session, site.id, response.fields, request_id=None, now=now)
+
+    summaries = vicinity.summarise(paired)
+    for name, agg in summaries.items():
+        row = session.exec(
+            select(VicinitySummary).where(VicinitySummary.site_id == site.id,
+                                          VicinitySummary.field_name == name)
+        ).first()
+        if row is None:
+            row = VicinitySummary(site_id=site.id, field_name=name,
+                                  field_class=agg["class"], direction=agg["direction"])
+            session.add(row)
+        row.field_class = agg["class"]
+        row.direction = agg["direction"]
+        row.best, row.worst = agg["best"], agg["worst"]
+        row.best_at_m = agg["best_at_m"]
+        row.spread = agg["spread"]
+        row.fraction_usable = agg["fraction_usable"]
+        row.n_samples, row.n_answers = agg["n_samples"], agg["n_answers"]
+        row.n_with_value = agg["n_with_value"]
+        row.coverage_note = agg["coverage_note"]
+        row.rings = list(rings)
+        row.fetched_at = now
+        row.updated_at = now
+
+    charged = sum(1 for _, resp, err in results if err is None
+                  for r in resp.fields.values() if r.status != "failed")
+    session.add(FetchLog(site_id=site.id, fields=fields, charged_credits=charged,
+                         trigger="vicinity", caller_ref=caller_ref, ok=True))
+    session.commit()
+
+    return {
+        "points_requested": len(points),
+        "points_returned": len(paired),
+        "entry_failures": entry_failures,
+        "rings": list(rings),
+        "fields": len(summaries),
+        "summaries": summaries,
+    }

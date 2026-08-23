@@ -23,6 +23,9 @@ class Settings(BaseSettings):
     phase2_fetch_timeout_s: float = 30.0
     phase2_fetch_address_timeout_s: float = 35.5  # +5.5s for the server-side geocode leg
     phase2_geocode_timeout_s: float = 10.0
+    # A batch is 25 fetches' worth of work processed 4 at a time; the reference says
+    # worst case ~90 s and "set timeout 120 s+".
+    phase2_batch_timeout_s: float = 180.0
     phase2_meta_timeout_s: float = 10.0
 
     # --- Storage ------------------------------------------------------------

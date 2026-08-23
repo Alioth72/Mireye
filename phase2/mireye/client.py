@@ -162,6 +162,55 @@ class MireyeClient:
         )
         return FetchResponse.model_validate(data), request_id
 
+    async def fetch_batch(
+        self,
+        locations: list,
+        fields: list,
+        *,
+        idempotency_key: str | None = None,
+    ) -> list:
+        """<=25 locations, ONE batch-wide field selection, one call.
+
+        Three properties from the reference this relies on:
+          1. ``results[i]`` answers ``locations[i]`` and carries ``index`` explicitly.
+          2. Each ``ok: true`` entry IS a ``/v1/fetch`` response body -- so
+             ``FetchResponse`` parses it with no new code.
+          3. A location's failure is an *entry* (``ok: false``), never an HTTP failure.
+             Location 7's bad address cannot cost you the other 24 results.
+
+        Returns ``[(index, FetchResponse | None, error_dict | None)]``. Entry-level
+        failure (the location itself) and field-level failure (``partial_failures``
+        inside a good entry) are deliberately NOT conflated -- the caller sees both.
+        """
+        if not locations:
+            return []
+        if len(locations) > 25:
+            raise MireyeError(
+                "invalid_request", f"{len(locations)} locations exceeds the batch cap of 25",
+                retryable=False,
+            )
+
+        payload: dict[str, Any] = {"locations": locations, "fields": fields}
+        headers = {"Idempotency-Key": idempotency_key or _new_request_id().replace("p2-", "b-")}
+        data, _ = await self._post(
+            "/v1/fetch/batch",
+            payload,
+            # A batch is 25 requests' worth of work, processed 4 at a time; worst case
+            # ~90 s. A short timeout does not cancel it -- it keeps running and billing.
+            timeout=max(self.settings.phase2_batch_timeout_s, 120.0),
+            extra_headers=headers,
+        )
+
+        out: list = []
+        for i, entry in enumerate(data.get("results") or data.get("locations") or []):
+            index = entry.get("index", i)
+            if entry.get("ok") is False:
+                out.append((index, None, entry.get("error") or {"error": "unknown"}))
+                continue
+            body = entry.get("result", entry)
+            out.append((index, FetchResponse.model_validate(body), None))
+        return out
+
     async def geocode(self, address: str) -> GeocodeResponse:
         data, _ = await self._post(
             "/v1/geocode", {"address": address}, timeout=self.settings.phase2_geocode_timeout_s

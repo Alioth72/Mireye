@@ -76,18 +76,44 @@ class _Reader:
     Conflating these inverts decisions, so the split is explicit everywhere.
     """
 
-    def __init__(self, dps: dict):
+    def __init__(self, dps: dict, vicinity: Optional[dict] = None):
         self.dps = dps
+        self.vicinity = vicinity or {}
         self.used: list = []
         self.missing: list = []
 
     def get(self, name: str):
+        """Prefer the vicinity summary where one exists.
+
+        For a CONNECTABLE field the summary's `best` is the right answer -- you reach
+        infrastructure rather than own it, so a 230 kV line 1.3 km away is genuinely
+        available even when the centroid reports `absent`. For an INTRINSIC field
+        `best` is the best ground in the ring; callers wanting the spread use
+        `distribution()`.
+        """
+        v = self.vicinity.get(name)
+        if v is not None and v.get("n_answers"):
+            self.used.append(name)
+            return v.get("best"), True
         dp = self.dps.get(name)
         if dp is None:
             self.missing.append(name)
             return None, False
         self.used.append(name)
         return dp.value, True
+
+    def distribution(self, name: str) -> Optional[dict]:
+        """Best/worst/fraction for an intrinsic field, when a ring was sampled.
+
+        An intrinsic field must never be reported as one number: we cannot know the
+        real parcel boundary, so a single value would pretend to describe a hundred
+        acres of mixed ground.
+        """
+        v = self.vicinity.get(name)
+        if not v or v.get("fraction_usable") is None:
+            return None
+        return {"best": v["best"], "worst": v["worst"],
+                "fraction_usable": v["fraction_usable"], "spread": v.get("spread")}
 
 
 
@@ -311,8 +337,13 @@ def _terrain(r: _Reader, th: dict) -> Component:
         return Component(0.5 if not present else th["slope_absent"],
                          "slope unknown" if not present else "slope not reported",
                          r.used, r.missing)
-    return Component(_inverse_band(float(slope), th["slope_bands"]),
-                     f"slope {float(slope):.1f} deg", r.used, r.missing)
+    note = f"slope {float(slope):.1f} deg"
+    dist = r.distribution("slope_degrees")
+    if dist:
+        note = (f"slope {float(dist['best']):.1f}-{float(dist['worst']):.1f} deg, "
+                f"{dist['fraction_usable'] * 100:.0f}% of sampled ground usable")
+    return Component(_inverse_band(float(slope), th["slope_bands"]), note,
+                     r.used, r.missing)
 
 
 def _cooling(r: _Reader, th: dict) -> Component:
@@ -848,7 +879,7 @@ def _apply_gates(component: str, dps: dict, th: dict, base: float):
     applied: list = []
     score_out = base
     for gate_fn in GATES.get(component, []):
-        r = _Reader(dps)
+        r = _Reader(dps)  # gates read centroid facts; a gate is about THIS ground
         g = gate_fn(r, th)
         if g is None:
             continue
@@ -874,6 +905,7 @@ def score(
     weights: Optional[dict] = None,
     thresholds: Optional[dict] = None,
     profile_name: str = "default",
+    vicinity: Optional[dict] = None,
 ) -> dict:
     if metric not in DEFAULT_WEIGHTS:
         raise KeyError(f"unknown metric {metric!r}; known: {', '.join(METRICS)}")
@@ -890,7 +922,7 @@ def score(
     product = 1.0
 
     for name, weight in w.items():
-        r = _Reader(dps)
+        r = _Reader(dps, vicinity)
         comp = COMPONENTS[name](r, th)
         gated, applied = _apply_gates(name, dps, th, comp.score)
         entry = {"score": round(gated, 4), "weight": round(weight / total, 4),
@@ -906,7 +938,7 @@ def score(
         product *= max(gated, 0.0) ** (weight / total)
 
     for name in penalties_for(metric):
-        r = _Reader(dps)
+        r = _Reader(dps, vicinity)
         comp = COMPONENTS[name](r, th)
         components[name] = {"score": round(comp.score, 4), "weight": None,
                             "role": "penalty_multiplier", "basis": comp.basis}
@@ -923,6 +955,7 @@ def score(
         "score": round(product, 4),
         "confidence": _confidence(missing, dps),
         "composition": "weighted_geometric_mean",
+        "measurement": "vicinity" if vicinity else "point",
         "calibration": "provisional — weights not yet fitted against real sites",
         "components": components,
         "fields_used": used,

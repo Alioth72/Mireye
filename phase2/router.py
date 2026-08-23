@@ -18,7 +18,7 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field, model_validator
 from sqlmodel import Session, select
 
-from . import catalog, scoring
+from . import catalog, scoring, vicinity as vicinity_mod
 from .bundles import (
     BUNDLES,
     MAX_FIELDS_PER_FETCH,
@@ -30,10 +30,12 @@ from .bundles import (
 )
 from .config import get_settings
 from .db import get_session
-from .models import Datapoint, FetchLog, ScoreProfile, Site, utcnow
+from .models import (
+    Datapoint, FetchLog, ScoreProfile, Site, VicinitySample, VicinitySummary, utcnow,
+)
 from .mireye.client import MireyeClient
 from .mireye.schemas import MireyeError
-from .orchestrator import read_or_fetch
+from .orchestrator import read_or_fetch, scan_vicinity
 from .store import read_fields, serialize
 
 router = APIRouter(prefix="/v1", tags=["phase2"])
@@ -447,6 +449,104 @@ async def refresh_datapoints(
 
 
 # --------------------------------------------------------------------------
+# vicinity
+# --------------------------------------------------------------------------
+def _vicinity_map(session: Session, site_id: str) -> dict:
+    """Vicinity summaries in the shape `scoring.score(vicinity=...)` expects."""
+    rows = session.exec(
+        select(VicinitySummary).where(VicinitySummary.site_id == site_id)
+    ).all()
+    return {
+        r.field_name: {
+            "best": r.best, "worst": r.worst, "best_at_m": r.best_at_m,
+            "spread": r.spread, "fraction_usable": r.fraction_usable,
+            "n_answers": r.n_answers, "n_with_value": r.n_with_value,
+            "coverage_note": r.coverage_note, "class": r.field_class,
+        }
+        for r in rows
+    }
+
+
+class VicinityScan(BaseModel):
+    bundles: list[str] = Field(default_factory=list)
+    fields: list[str] = Field(default_factory=list)
+    metric: Optional[str] = None
+    rings: Optional[list[int]] = None
+    caller_ref: Optional[str] = None
+
+
+@router.post("/sites/{site_id}/vicinity:scan", tags=["vicinity"])
+async def vicinity_scan(
+    site_id: str,
+    body: VicinityScan,
+    session: Session = Depends(get_session),
+    client: MireyeClient = Depends(get_client),
+) -> dict[str, Any]:
+    """Sample a ring around the site in ONE batch call.
+
+    A `nearest_*` field measured at a single centroid can only ever UNDER-report
+    proximity, so absence at one point is a search-radius artefact rather than a fact
+    about the site. This is the fix for that error class.
+    """
+    site = _get_site(session, site_id)
+
+    selection: list[str] = []
+    if body.metric:
+        if body.metric not in scoring.METRICS:
+            raise HTTPException(404, {"error": "unknown_metric", "message": body.metric})
+        selection = scoring.required_fields(body.metric)
+    try:
+        for f in fields_for(body.bundles) if body.bundles else []:
+            if f not in selection:
+                selection.append(f)
+    except UnknownBundle as exc:
+        raise HTTPException(400, {"error": "unknown_bundle", "message": str(exc)})
+    for f in body.fields:
+        if f not in selection:
+            selection.append(f)
+    if not selection:
+        raise HTTPException(400, {"error": "no_fields_requested",
+                                  "message": "send metric, bundles and/or fields"})
+    if len(selection) > MAX_FIELDS_PER_FETCH:
+        raise HTTPException(400, {"error": "fields_too_many",
+                                  "message": f"{len(selection)} > {MAX_FIELDS_PER_FETCH}"})
+
+    rings = tuple(body.rings) if body.rings else vicinity_mod.DEFAULT_RINGS
+    try:
+        out = await scan_vicinity(session, client, site, selection, rings=rings,
+                                  caller_ref=body.caller_ref)
+    except ValueError as exc:
+        raise HTTPException(400, {"error": "invalid_rings", "message": str(exc)})
+    if out.get("error"):
+        raise HTTPException(502, {"error": "vicinity_scan_failed", "message": out["error"]})
+    return {"site_id": site_id, **out}
+
+
+@router.get("/sites/{site_id}/vicinity", tags=["vicinity"])
+def get_vicinity(
+    site_id: str,
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
+    """Stored ring summaries. Cache-only."""
+    _get_site(session, site_id)
+    summaries = _vicinity_map(session, site_id)
+    by_class: dict[str, list] = {}
+    for name, agg in summaries.items():
+        by_class.setdefault(agg["class"], []).append({"field": name, **agg})
+    return {
+        "site_id": site_id,
+        "field_count": len(summaries),
+        "by_class": by_class,
+        "note": (
+            "connectable fields report the best reachable value (you reach "
+            "infrastructure, you do not own it); intrinsic fields report best, worst "
+            "and the usable fraction, because we cannot know the parcel boundary and "
+            "one number would pretend to describe a hundred acres"
+        ),
+    }
+
+
+# --------------------------------------------------------------------------
 # derived scores
 # --------------------------------------------------------------------------
 class ScoreOverride(BaseModel):
@@ -483,8 +583,10 @@ async def _derived(
         trigger="cache_miss",
         caller_ref=caller_ref,
     )
+    vic = _vicinity_map(session, site_id)
     result = scoring.score(
-        metric, answers, weights=weights, thresholds=thresholds, profile_name=profile_name
+        metric, answers, weights=weights, thresholds=thresholds,
+        profile_name=profile_name, vicinity=vic or None,
     )
     result["site_id"] = site_id
     result["fetch"] = _outcome_payload(outcome)

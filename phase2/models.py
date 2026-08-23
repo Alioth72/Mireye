@@ -97,6 +97,71 @@ class Datapoint(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=utcnow)
 
 
+class VicinitySample(SQLModel, table=True):
+    """One field observation at one ring point.
+
+    Kept alongside `p2_datapoint` rather than replacing it: the centroid stays the
+    single-point truth so every existing query keeps working, and the ring adds the
+    distribution around it.
+    """
+
+    __tablename__ = "p2_vicinity_sample"
+    __table_args__ = (
+        UniqueConstraint("site_id", "field_name", "ring_m", "bearing_deg",
+                         name="uq_p2_vicinity_sample"),
+    )
+
+    id: str = Field(default_factory=_uuid, primary_key=True)
+    site_id: str = Field(index=True, foreign_key="p2_site.id")
+    field_name: str = Field(index=True)
+    ring_m: int
+    bearing_deg: int
+    lat: float
+    lng: float
+
+    value: Optional[Any] = Field(default=None, sa_column=Column(JSON))
+    status: str            # 'ok' | 'absent' | 'failed' -- same tri-state as Datapoint
+    source: Optional[str] = None
+    fetched_at: Optional[datetime] = None
+    created_at: datetime = Field(default_factory=utcnow)
+
+
+class VicinitySummary(SQLModel, table=True):
+    """Aggregated ring result for one field.
+
+    `best`/`worst`/`fraction_usable` exist together deliberately: an intrinsic field must
+    never collapse to a single number, because we cannot know the real parcel boundary
+    and one value would pretend to describe a hundred acres.
+    """
+
+    __tablename__ = "p2_vicinity_summary"
+    __table_args__ = (
+        UniqueConstraint("site_id", "field_name", name="uq_p2_vicinity_summary"),
+    )
+
+    id: str = Field(default_factory=_uuid, primary_key=True)
+    site_id: str = Field(index=True, foreign_key="p2_site.id")
+    field_name: str = Field(index=True)
+
+    field_class: str       # 'connectable' | 'intrinsic' | 'regional'
+    direction: str
+    best: Optional[Any] = Field(default=None, sa_column=Column(JSON))
+    worst: Optional[Any] = Field(default=None, sa_column=Column(JSON))
+    best_at_m: Optional[int] = None
+    spread: Optional[float] = None
+    fraction_usable: Optional[float] = None
+
+    n_samples: int = 0
+    n_answers: int = 0
+    n_with_value: int = 0
+    coverage_note: Optional[str] = None
+
+    rings: Optional[Any] = Field(default=None, sa_column=Column(JSON))
+    fetched_at: Optional[datetime] = None
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
 class FetchLog(SQLModel, table=True):
     """Credit audit trail. This is demo evidence, not ops hygiene: it is how the team
     proves N events cost N fetches and not N x documents."""
