@@ -75,17 +75,15 @@ async def main() -> None:
                     print(f"  ! {label}: {outcome.error}", file=sys.stderr)
 
     # ---- report -----------------------------------------------------------
-    hdr = f"{'site':<26}{'score':>7}  {'power':>6}{'fiber':>7}{'terrain':>9}{'clear':>7}   basis"
+    cols = ["power", "interconnect", "terrain", "cooling", "water", "clear"]
+    hdr = f"{'site':<26}{'score':>7}  " + "".join(f"{c[:6]:>8}" for c in cols) + "   basis"
     print(hdr)
     print("-" * len(hdr))
     for label, r in sorted(rows, key=lambda x: -x[1]["score"]):
         c = r["components"]
-        print(
-            f"{label:<26}{r['score']:>7.3f}  "
-            f"{c['power']['score']:>6.2f}{c['fiber']['score']:>7.2f}"
-            f"{c['terrain']['score']:>9.2f}{c['clear']['score']:>7.2f}   "
-            f"{c['power']['basis']}; {c['terrain']['basis']}"
-        )
+        line = f"{label:<26}{r['score']:>7.3f}  "
+        line += "".join(f"{c[k]['score']:>8.2f}" if k in c else f"{'-':>8}" for k in cols)
+        print(line + f"   {c['power']['basis']}; {c['clear']['basis']}")
 
     scores = [r["score"] for _, r in rows]
     seattle = [r["score"] for label, r in rows if not label.startswith("Rural")]

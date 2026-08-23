@@ -54,16 +54,26 @@ BUNDLES: MappingProxyType[str, tuple[str, ...]] = MappingProxyType(
         "grid": (
             "nearest_transmission_line_voltage_kv",
             "nearest_transmission_line_distance_m",
+            # Voltage CLASS/BASIS distinguish "no line in range" from "line, voltage
+            # unpublished". Mireye: "Null here != 'no voltage' -- check voltage_class".
+            "nearest_transmission_line_voltage_class",
             "nearest_substation_distance_m",
+            # "may be LOWER than max within radius if a higher-voltage line runs
+            # slightly farther; read both" -- so scoring takes the better of the two.
             "max_transmission_line_voltage_kv_within_radius",
             "transmission_redundancy_flag",
             "interconnection_queue_active_capacity_county_mw",
         ),
         # Fiber / connectivity.
         "telecom": (
+            # NOTE: fiber_broadband_available is mass-market consumer FTTP and is an
+            # availability FLOOR, not an interconnect signal (Mireye's own hint). The
+            # long-haul corridor proxy is the closer signal for carrier backhaul.
             "fiber_broadband_available",
             "fiber_provider_count",
             "mobile_5g_coverage_class",
+            "nearest_long_haul_rail_corridor_distance_m",
+            "nearest_submarine_cable_distance_m",
         ),
         # Buildability of the ground.
         "terrain": (
@@ -77,11 +87,24 @@ BUNDLES: MappingProxyType[str, tuple[str, ...]] = MappingProxyType(
             "fema_flood_zone",
             "intersects_wetland",
             "wetland_acres",
+            # Cooling water. within_water_service_area is a mapped CWS boundary --
+            # a strong sign municipal water exists, NOT a will-serve commitment.
+            "within_water_service_area",
+            "water_service_area_provenance",
+            "surface_water_supply_use_index_huc12",
+            "huc12_thermoelectric_consumptive_use_m3_per_day",
         ),
         # Protected / habitat / easement. These live in the `parcels` LAYER but are
         # NOT members of the metered `parcel_record` GROUP -- 1 credit each.
         "constraints": (
             "intersects_protected_area",
+            # GAP status is what makes the protected flag meaningful. Mireye: "1/2 =
+            # real conservation protection ... 4 ~ nominal -- Do NOT overstate GAP 4
+            # as a development constraint." Without this, a city park reads as a
+            # hard disqualifier.
+            "protected_area_gap_status",
+            "protected_area_designation",
+            "protected_area_name",
             "intersects_critical_habitat",
             "intersects_conservation_easement",
         ),
@@ -90,6 +113,28 @@ BUNDLES: MappingProxyType[str, tuple[str, ...]] = MappingProxyType(
             "nearest_major_road_distance_m",
             "nearest_major_road_class",
             "nearest_rail_line_distance_m",
+        ),
+        # Nonattainment triggers stricter New Source Review / emission offsets for
+        # combustion equipment -- directly raises permitting cost and timeline for
+        # backup diesel and on-site gas at a data centre.
+        "airquality": (
+            "in_air_quality_nonattainment",
+            "air_quality_nonattainment_pollutants",
+            "air_quality_worst_classification",
+        ),
+        # Evaporative-cooling viability. design_wet_bulb is "THE variable": >~25C
+        # means low evap potential, oversized towers, less water saving.
+        "climate": (
+            "design_wet_bulb_temperature_0_4pct_degc",
+            "days_above_32c_annual_count",
+            "mean_annual_relative_humidity_pct",
+        ),
+        # Operating cost and community-pushback exposure.
+        "market": (
+            "avg_retail_electricity_price_industrial_usd_per_kwh",
+            "housing_units_within_1km",
+            "housing_units_density_per_km2",
+            "nearest_urban_area_distance_m",
         ),
         # Pulled once at site registration. Phase 3 uses these for scope resolution.
         "boundaries": (

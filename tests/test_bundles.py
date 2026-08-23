@@ -60,6 +60,23 @@ def test_the_five_disguised_parcel_fields_are_caught(field: str) -> None:
     assert touches_parcel_record([field]) == {field}
 
 
+def test_gap_status_travels_with_the_protected_flag() -> None:
+    """Regression: `intersects_protected_area` alone scored a municipal golf course as a
+    hard disqualifier. Mireye: "Do NOT overstate GAP 4 as a development constraint."
+    The flag is only interpretable alongside its GAP status."""
+    constraints = BUNDLES["constraints"]
+    assert "intersects_protected_area" in constraints
+    assert "protected_area_gap_status" in constraints
+
+
+def test_grid_carries_both_voltage_readings() -> None:
+    """Mireye: nearest voltage "may be LOWER than max within radius ... read both"."""
+    grid = BUNDLES["grid"]
+    assert "nearest_transmission_line_voltage_kv" in grid
+    assert "max_transmission_line_voltage_kv_within_radius" in grid
+    assert "nearest_transmission_line_voltage_class" in grid
+
+
 def test_lookalike_fields_are_not_in_the_group() -> None:
     """`wetland_acres` and `intersects_protected_area` sit in the parcels LAYER but not
     in the metered GROUP -- 1 credit each. Confusing them the other way would make us
@@ -77,12 +94,15 @@ def test_estimate_credits_flags_the_parcel_cliff() -> None:
 # bundle shape
 # --------------------------------------------------------------------------
 EXPECTED_CREDITS = {
-    "grid": 6,
-    "telecom": 3,
+    "grid": 7,
+    "telecom": 5,
     "terrain": 3,
-    "water": 4,
-    "constraints": 3,
+    "water": 8,
+    "constraints": 6,
     "access": 3,
+    "airquality": 3,
+    "climate": 3,
+    "market": 4,
     "boundaries": 4,
 }
 
@@ -105,9 +125,11 @@ def test_bundle_fields_are_unique(name: str) -> None:
 def test_full_data_center_selection_fits_one_fetch() -> None:
     """The heaviest recommended selection (sec. 10.1) must stay under the 50-field cap
     so it is one call, not two."""
-    selection = fields_for(["grid", "telecom", "terrain", "water", "constraints"])
+    selection = fields_for(
+        ["grid", "telecom", "terrain", "water", "constraints", "airquality", "climate"]
+    )
     assert len(selection) <= MAX_FIELDS_PER_FETCH
-    assert estimate_credits(selection) == 19
+    assert estimate_credits(selection) == 35
 
 
 def test_every_bundle_alone_fits_one_fetch() -> None:
@@ -130,7 +152,7 @@ def test_bess_selection_excludes_fiber() -> None:
     why Phase 1 must keep `subject` in its emitted event."""
     bess = fields_for(["grid", "terrain", "water", "constraints"])
     assert "fiber_broadband_available" not in bess
-    assert estimate_credits(bess) == 16
+    assert estimate_credits(bess) == 24
 
 
 def test_unknown_bundle_names_itself() -> None:
