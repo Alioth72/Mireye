@@ -55,6 +55,21 @@ def site(**over) -> list:
         "surface_water_supply_use_index_huc12": 0.05,
         "avg_retail_electricity_price_industrial_usd_per_kwh": 0.055,
         "nearest_major_road_distance_m": 700,
+        "nearest_osm_substation_distance_m": 1200,
+        "nearest_osm_substation_max_voltage_kv": 230,
+        "nearest_urban_area_rtt_floor_ms": 0.4,
+        "nearest_urban_area_distance_m": 9000,
+        "egrid_co2_output_rate_kg_per_mwh": 90,
+        "tax_incentive_stack": "opportunity_zone",
+        "in_opportunity_zone": True,
+        "interconnection_queue_active_capacity_county_mw": 300,
+        "landslide_susceptibility_index": 10,
+        "seismic_design_category": "B",
+        "in_karst_area": False,
+        "karst_exposure_class": None,
+        "nearest_class_i_area_distance_m": 400000,
+        "nearest_class_i_area_name": None,
+        "in_air_quality_maintenance": False,
         "intersects_protected_area": False,
         "protected_area_gap_status": None,
         "protected_area_name": None,
@@ -138,7 +153,9 @@ def test_genuinely_absent_transmission_says_so_precisely() -> None:
     must claim "within search radius" — not that no line exists anywhere."""
     none_in_range = site(nearest_transmission_line_voltage_kv=None,
                          max_transmission_line_voltage_kv_within_radius=None,
-                         nearest_transmission_line_voltage_class=None)
+                         nearest_transmission_line_voltage_class=None,
+                         nearest_osm_substation_distance_m=None,
+                         nearest_osm_substation_max_voltage_kv=None)
     r = score("data_center_optionality", none_in_range)
     assert r["components"]["power"]["score"] <= 0.1
     assert "search radius" in r["components"]["power"]["basis"]
@@ -189,6 +206,8 @@ def test_no_power_means_zero_optionality() -> None:
                     max_transmission_line_voltage_kv_within_radius=None,
                     nearest_transmission_line_voltage_class=None,
                     nearest_substation_distance_m=None,
+                    nearest_osm_substation_distance_m=None,
+                    nearest_osm_substation_max_voltage_kv=None,
                     slope_degrees=0.5)
     r = score("data_center_optionality", farmland)
 
@@ -297,3 +316,83 @@ def test_every_scored_field_is_exportable() -> None:
     exported = set(all_feature_fields())
     for metric in METRICS:
         assert set(required_fields(metric)) <= exported, metric
+
+
+# ==========================================================================
+# gates — qualifiers that discount their parent component
+# ==========================================================================
+def test_class_i_proximity_gates_behind_the_meter_gas() -> None:
+    """REGRESSION. btm_gas_candidacy_flag: True was scored as a strong gas option
+    without checking whether a gas plant could be permitted there. Mireye: a BTM gas
+    plant clearing PSD thresholds near a Class I area "triggers mandatory Federal-Land-
+    Manager consultation + visibility modeling (customary screening ~300 km)".
+    Centralia WA sits 72 km from Mount Rainier NP."""
+    near = site(btm_gas_candidacy_flag=True, nearest_gas_pipeline_distance_m=3000,
+                nearest_class_i_area_distance_m=72000,
+                nearest_class_i_area_name="Mount Rainier NP")
+    r = score("energy_park_optionality", near)
+    btm = r["components"]["btm_fuel"]
+    assert btm["score"] < btm["ungated_score"]
+    assert any("Class I" in g["reason"] for g in btm["gates"])
+
+
+def test_far_from_class_i_does_not_gate() -> None:
+    far = site(btm_gas_candidacy_flag=True, nearest_gas_pipeline_distance_m=3000,
+               nearest_class_i_area_distance_m=450000)
+    assert "gates" not in score("energy_park_optionality", far)["components"]["btm_fuel"]
+
+
+def test_heavy_interconnection_queue_gates_power_downward() -> None:
+    """REGRESSION on direction. Mireye: "Heavy active queue = constrained headroom +
+    study-delay risk; low queue near strong transmission = green-field signal." An
+    earlier reading treated a busy queue as a positive market signal."""
+    busy = score("data_center_optionality",
+                 site(interconnection_queue_active_capacity_county_mw=12000))
+    quiet = score("data_center_optionality",
+                  site(interconnection_queue_active_capacity_county_mw=100))
+    assert busy["components"]["power"]["score"] < quiet["components"]["power"]["score"]
+
+
+def test_flat_ground_can_still_be_unbuildable() -> None:
+    """Slope alone says buildable; landslide susceptibility, seismic category and karst
+    exposure are the qualifiers that say otherwise."""
+    treacherous = site(slope_degrees=1.0, landslide_susceptibility_index=95,
+                       seismic_design_category="E", in_karst_area=True,
+                       karst_exposure_class="exposed")
+    t = score("data_center_optionality", treacherous)["components"]["terrain"]
+    assert t["ungated_score"] == 1.0
+    assert t["score"] < 0.35
+    assert len(t["gates"]) == 3
+
+
+def test_karst_needs_its_exposure_qualifier() -> None:
+    """Mireye: karst_exposure_class is "the single most load-bearing qualifier on
+    in_karst_area" — buried karst is far less of a foundation problem than exposed."""
+    exposed = score("data_center_optionality",
+                    site(in_karst_area=True, karst_exposure_class="exposed"))
+    buried = score("data_center_optionality",
+                   site(in_karst_area=True,
+                        karst_exposure_class="buried_under_insoluble_cover"))
+    assert exposed["components"]["terrain"]["score"] < buried["components"]["terrain"]["score"]
+
+
+def test_osm_is_consulted_before_declaring_no_grid() -> None:
+    """EIA reporting absent does not prove no line exists. OpenInfraMap is a second
+    source, and a hit means "EIA has no record", not "no grid"."""
+    eia_blind = site(nearest_transmission_line_voltage_kv=None,
+                     max_transmission_line_voltage_kv_within_radius=None,
+                     nearest_transmission_line_voltage_class=None,
+                     nearest_osm_substation_distance_m=1500,
+                     nearest_osm_substation_max_voltage_kv=115)
+    r = score("data_center_optionality", eia_blind)
+    assert r["components"]["power"]["score"] > 0.1
+    assert "OSM" in r["components"]["power"]["basis"]
+
+
+def test_gates_are_transparent_in_the_response() -> None:
+    """A gated score must always show what was gated and by how much — Phase 3 has to
+    be able to explain a low score to a landowner."""
+    r = score("data_center_optionality", site(seismic_design_category="E"))
+    t = r["components"]["terrain"]
+    assert "ungated_score" in t and "gates" in t
+    assert t["gates"][0]["multiplier"] < 1.0 and t["gates"][0]["reason"]

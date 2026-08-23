@@ -90,6 +90,127 @@ class _Reader:
         return dp.value, True
 
 
+
+# ---------------------------------------------------------------------------
+# gates
+# ---------------------------------------------------------------------------
+# Mireye fields are not independent inputs to an average -- several form permitting
+# CHAINS where a qualifier discounts or vetoes its parent. Scoring `btm_gas_candidacy_
+# flag: True` without checking Class I proximity says a gas plant is viable when it may
+# not be permittable; scoring `slope_degrees` alone says flat ground is buildable when
+# it may be karst. A gate is a qualifier attached to a component, applied after it.
+
+
+@dataclass
+class Gate:
+    multiplier: float
+    reason: str
+    fields_used: list = dc_field(default_factory=list)
+
+
+def _gate_class_i(r: _Reader, th: dict):
+    """PSD / Federal Land Manager exposure for on-site combustion.
+
+    Mireye: "A BTM gas plant clearing PSD major-source thresholds near a Class I area
+    triggers mandatory Federal-Land-Manager consultation + visibility / air-quality-
+    related-values modeling (customary screening ~300 km) -- a lead-time and cost
+    escalator distinct from nonattainment NNSR."
+    """
+    dist, present = r.get("nearest_class_i_area_distance_m")
+    name, _ = r.get("nearest_class_i_area_name")
+    if dist is None:
+        return None
+    km = float(dist) / 1000
+    mult = _band(km, th["class_i_bands"])
+    if mult >= 1.0:
+        return None
+    return Gate(mult, f"Class I area {name or 'protected airshed'} at {km:.0f} km "
+                      f"-- PSD/FLM consultation likely", ["nearest_class_i_area_distance_m"])
+
+
+def _gate_nonattainment(r: _Reader, th: dict):
+    """NNSR + emission offsets for combustion equipment in nonattainment areas."""
+    naa, _ = r.get("in_air_quality_nonattainment")
+    maint, _ = r.get("in_air_quality_maintenance")
+    if naa:
+        return Gate(th["gate_nonattainment"], "nonattainment -- NNSR + emission offsets "
+                    "required for on-site combustion", ["in_air_quality_nonattainment"])
+    if maint:
+        return Gate(th["gate_maintenance"], "air-quality maintenance area -- added "
+                    "permitting obligations", ["in_air_quality_maintenance"])
+    return None
+
+
+def _gate_landslide(r: _Reader, th: dict):
+    """Mireye: "High values trigger geotech investigation for foundations / access roads
+    / buried interconnect on slopes. Complements slope_degrees (modeled failure, not
+    just steepness)." """
+    idx, _ = r.get("landslide_susceptibility_index")
+    if idx is None:
+        return None
+    mult = _inverse_band(float(idx), th["landslide_bands"])
+    if mult >= 1.0:
+        return None
+    return Gate(mult, f"landslide susceptibility {float(idx):.0f} -- geotech required",
+                ["landslide_susceptibility_index"])
+
+
+def _gate_seismic(r: _Reader, th: dict):
+    """Mireye: "A/B minimal detailing; D/E/F require special seismic systems + equipment
+    certification + major cost/schedule." """
+    cat, _ = r.get("seismic_design_category")
+    if not cat:
+        return None
+    mult = th["seismic_categories"].get(str(cat).upper().strip())
+    if mult is None or mult >= 1.0:
+        return None
+    return Gate(mult, f"seismic design category {cat} -- special systems and equipment "
+                      "certification", ["seismic_design_category"])
+
+
+def _gate_karst(r: _Reader, th: dict):
+    """Mireye: karst_exposure_class is "the single most load-bearing qualifier on
+    in_karst_area. exposed ... means soluble rock at or near the land surface -- the
+    sinkhole-relevant case." The bare boolean is not actionable on its own.
+    """
+    in_karst, _ = r.get("in_karst_area")
+    exposure, _ = r.get("karst_exposure_class")
+    if not in_karst:
+        return None
+    key = str(exposure or "unknown").lower()
+    mult = th["karst_exposure"].get(key, th["karst_default"])
+    if mult >= 1.0:
+        return None
+    return Gate(mult, f"karst ({key}) -- sinkhole / foundation risk",
+                ["in_karst_area", "karst_exposure_class"])
+
+
+def _gate_queue(r: _Reader, th: dict):
+    """Interconnection headroom.
+
+    Mireye: "Heavy active queue = constrained headroom + study-delay risk; low queue
+    near strong transmission = green-field signal." Note the direction -- a heavy queue
+    is a NEGATIVE, which an earlier reading of this field had backwards.
+    """
+    mw, _ = r.get("interconnection_queue_active_capacity_county_mw")
+    if mw is None:
+        return None
+    mult = _inverse_band(float(mw), th["queue_bands"])
+    if mult >= 1.0:
+        return None
+    return Gate(mult, f"{float(mw):.0f} MW active interconnection queue in county "
+                      "-- constrained headroom, study delay",
+                ["interconnection_queue_active_capacity_county_mw"])
+
+
+#: component -> qualifiers applied after it
+GATES: dict = {
+    "btm_fuel": [_gate_class_i, _gate_nonattainment],
+    "terrain": [_gate_landslide, _gate_seismic, _gate_karst],
+    "power": [_gate_queue],
+}
+
+
 # ---------------------------------------------------------------------------
 # components
 # ---------------------------------------------------------------------------
@@ -115,8 +236,21 @@ def _power(r: _Reader, th: dict) -> Component:
             return Component(th["voltage_unpublished"],
                              f"line present, voltage class {vclass}", r.used, r.missing)
         if kv_present:
+            # Second source. EIA absent does not prove no grid -- OpenInfraMap covers
+            # lines EIA omits, so a hit here means "EIA has no record", not "no line".
+            osm_kv, _ = r.get("nearest_osm_substation_max_voltage_kv")
+            osm_d, _ = r.get("nearest_osm_substation_distance_m")
+            if osm_kv is not None or osm_d is not None:
+                sc = th["voltage_absent"] + (th["osm_only_ceiling"] - th["voltage_absent"]) * (
+                    _decay(float(osm_d), th["substation_full_m"], th["substation_zero_m"])
+                    if osm_d is not None else 0.5)
+                detail = f"{osm_kv:g} kV " if osm_kv is not None else ""
+                detail += f"at {float(osm_d)/1000:.1f} km" if osm_d is not None else ""
+                return Component(sc, f"no EIA transmission in range; OSM substation {detail}",
+                                 r.used, r.missing)
             return Component(th["voltage_absent"],
-                             "no transmission line within search radius", r.used, r.missing)
+                             "no transmission line within search radius (EIA and OSM)",
+                             r.used, r.missing)
         return Component(0.5, "transmission voltage not fetched", r.used, r.missing)
 
     volt = _band(float(best), th["voltage_bands"])
@@ -446,6 +580,57 @@ def _fire_siting(r: _Reader, th: dict) -> Component:
     return Component(sc, ", ".join(notes) or "no elevated fire exposure", r.used, r.missing)
 
 
+
+def _latency(r: _Reader, th: dict) -> Component:
+    """Network latency floor to the nearest urban population centre.
+
+    A first-order data-centre variable that nothing else in this module captures:
+    inference and interactive workloads are latency-bound, and the speed-of-light
+    floor to users is irreducible once a site is chosen.
+    """
+    rtt, present = r.get("nearest_urban_area_rtt_floor_ms")
+    urban_d, _ = r.get("nearest_urban_area_distance_m")
+    if rtt is None:
+        if urban_d is None:
+            return Component(0.5, "latency not fetched", r.used, r.missing)
+        return Component(_inverse_band(float(urban_d) / 1000, th["latency_km_bands"]),
+                         f"urban area {float(urban_d)/1000:.0f} km (distance proxy)",
+                         r.used, r.missing)
+    return Component(_inverse_band(float(rtt), th["rtt_bands"]),
+                     f"{float(rtt):.2f} ms RTT floor to urban area", r.used, r.missing)
+
+
+def _carbon(r: _Reader, th: dict) -> Component:
+    """Grid carbon intensity.
+
+    Mireye: "an underwriting/ESG gate for 24/7-CFE data centers and a storage-arbitrage
+    signal." Hyperscaler carbon commitments hard-gate siting, so a clean subregion is a
+    real advantage, not a nicety.
+    """
+    co2, present = r.get("egrid_co2_output_rate_kg_per_mwh")
+    if co2 is None:
+        return Component(0.5, "grid carbon not fetched" if not present else "carbon absent",
+                         r.used, r.missing)
+    return Component(_inverse_band(float(co2), th["co2_bands"]),
+                     f"{float(co2):.0f} kg CO2/MWh grid intensity", r.used, r.missing)
+
+
+def _incentives(r: _Reader, th: dict) -> Component:
+    """Tax and incentive stack. Data-centre siting is heavily incentive-driven."""
+    stack, present = r.get("tax_incentive_stack")
+    oz, _ = r.get("in_opportunity_zone")
+    if stack is None and not oz:
+        if not present:
+            return Component(0.5, "incentives not fetched", r.used, r.missing)
+        return Component(th["incentive_none"], "no incentive programmes mapped",
+                         r.used, r.missing)
+    items = [x.strip() for x in str(stack or "").replace(";", ",").split(",") if x.strip()]
+    if oz and "opportunity_zone" not in items:
+        items.append("opportunity_zone")
+    sc = min(1.0, th["incentive_none"] + th["per_incentive"] * len(items))
+    return Component(sc, ", ".join(items) or "none", r.used, r.missing)
+
+
 COMPONENTS: dict[str, Callable[[_Reader, dict], Component]] = {
     "power": _power,
     "interconnect": _interconnect,
@@ -458,6 +643,9 @@ COMPONENTS: dict[str, Callable[[_Reader, dict], Component]] = {
     "isolation": _isolation,
     "low_disturbance": _low_disturbance,
     "btm_fuel": _btm_fuel,
+    "latency": _latency,
+    "carbon": _carbon,
+    "incentives": _incentives,
     "clear": _clear,
     "fire_siting": _fire_siting,
 }
@@ -468,7 +656,7 @@ COMPONENTS: dict[str, Callable[[_Reader, dict], Component]] = {
 DEFAULT_THRESHOLDS: dict[str, Any] = {
     # ">=230 kV = transmission-grade, <100 kV = sub-transmission"
     "voltage_bands": [(230, 1.0), (100, 0.80), (1, 0.45)],
-    "voltage_absent": 0.05,
+    "voltage_absent": 0.03,
     "voltage_unpublished": 0.45,
     # ">10-20km often kills a site"
     "substation_full_m": 3000,
@@ -538,6 +726,26 @@ DEFAULT_THRESHOLDS: dict[str, Any] = {
     "pipeline_zero_m": 30000,
     "pipeline_floor": 0.4,
     "onsite_gen_cost_bands": [(80, 1.0), (110, 0.9), (140, 0.75), (200, 0.5), (1e9, 0.3)],
+    "osm_only_ceiling": 0.40,
+    "rtt_bands": [(0.5, 1.0), (2, 0.92), (5, 0.8), (12, 0.6), (1e9, 0.4)],
+    "latency_km_bands": [(15, 1.0), (50, 0.9), (150, 0.75), (400, 0.55), (1e9, 0.35)],
+    "co2_bands": [(100, 1.0), (250, 0.9), (400, 0.75), (600, 0.55), (1e9, 0.4)],
+    "incentive_none": 0.55,
+    "per_incentive": 0.18,
+
+    # --- gates -------------------------------------------------------------
+    # PSD screening radius is customarily ~300 km; closer means heavier consultation.
+    "class_i_bands": [(300, 1.0), (150, 0.85), (50, 0.6), (0, 0.4)],
+    "gate_nonattainment": 0.55,
+    "gate_maintenance": 0.85,
+    "landslide_bands": [(20, 1.0), (50, 0.92), (75, 0.8), (90, 0.65), (100, 0.5)],
+    "seismic_categories": {"A": 1.0, "B": 1.0, "C": 0.95, "D": 0.85, "E": 0.7, "F": 0.6},
+    "karst_exposure": {"exposed": 0.55, "buried_under_thin_glacial_cover": 0.85,
+                       "buried_under_insoluble_cover": 0.9, "unknown": 0.8},
+    "karst_default": 0.8,
+    # "Heavy active queue = constrained headroom + study-delay risk"
+    "queue_bands": [(500, 1.0), (2000, 0.9), (5000, 0.78), (15000, 0.65), (1e9, 0.55)],
+
     # NFPA 855 / IFC 1207.5.7 combustible-vegetation clearance around pad-mounted BESS.
     "wildfire_bands": [(0.001, 1.0), (0.01, 0.9), (0.05, 0.7), (1e9, 0.5)],
     "canopy_fire_threshold_pct": 40,
@@ -547,8 +755,11 @@ DEFAULT_THRESHOLDS: dict[str, Any] = {
 #: metric -> GRADED component weights (weighted geometric mean). PROVISIONAL.
 DEFAULT_WEIGHTS: dict[str, dict[str, float]] = {
     "data_center_optionality": {
-        "power": 0.40, "interconnect": 0.20, "terrain": 0.15,
-        "cooling": 0.15, "water": 0.10,
+        # power stays dominant deliberately: each component added dilutes every other
+        # one under a geometric mean, and the no-grid veto is the guard that separates
+        # this from a keyword feed. Do not shave this to make room for a new component.
+        "power": 0.34, "interconnect": 0.14, "latency": 0.09, "terrain": 0.12,
+        "cooling": 0.11, "water": 0.09, "carbon": 0.06, "cost": 0.05,
     },
     # A battery needs grid and ground. It does not need fibre, cooling water, or
     # evaporative-cooling climate -- it is a price-arbitrage asset, so cost matters.
@@ -559,8 +770,8 @@ DEFAULT_WEIGHTS: dict[str, dict[str, float]] = {
     # grid infrastructure, away from settlement, on already-disturbed ground, with a
     # behind-the-meter fuel option to bridge multi-year interconnection queues.
     "energy_park_optionality": {
-        "power": 0.25, "legacy": 0.20, "isolation": 0.15,
-        "low_disturbance": 0.15, "btm_fuel": 0.15, "terrain": 0.10,
+        "power": 0.22, "legacy": 0.18, "isolation": 0.13, "low_disturbance": 0.13,
+        "btm_fuel": 0.13, "terrain": 0.09, "incentives": 0.12,
     },
 }
 
@@ -574,7 +785,11 @@ METRICS = tuple(DEFAULT_WEIGHTS)
 
 _PER_COMPONENT = {
     "power": ["nearest_transmission_line_voltage_kv", "max_transmission_line_voltage_kv_within_radius",
-              "nearest_transmission_line_voltage_class", "nearest_substation_distance_m"],
+              "nearest_transmission_line_voltage_class", "nearest_substation_distance_m",
+              "nearest_osm_substation_distance_m", "nearest_osm_substation_max_voltage_kv"],
+    "latency": ["nearest_urban_area_rtt_floor_ms", "nearest_urban_area_distance_m"],
+    "carbon": ["egrid_co2_output_rate_kg_per_mwh"],
+    "incentives": ["tax_incentive_stack", "in_opportunity_zone"],
     "interconnect": ["fiber_broadband_available", "fiber_provider_count",
                      "nearest_long_haul_rail_corridor_distance_m"],
     "terrain": ["slope_degrees"],
@@ -595,6 +810,15 @@ _PER_COMPONENT = {
     "fire_siting": ["wildfire_annual_frequency", "tree_canopy_pct"],
 }
 
+#: qualifier fields a gate needs, fetched alongside the component it gates
+_GATE_FIELDS = {
+    "btm_fuel": ["nearest_class_i_area_distance_m", "nearest_class_i_area_name",
+                 "in_air_quality_nonattainment", "in_air_quality_maintenance"],
+    "terrain": ["landslide_susceptibility_index", "seismic_design_category",
+                "in_karst_area", "karst_exposure_class"],
+    "power": ["interconnection_queue_active_capacity_county_mw"],
+}
+
 
 def penalties_for(metric: str) -> tuple:
     return METRIC_PENALTIES.get(metric, PENALTY_COMPONENTS)
@@ -603,7 +827,7 @@ def penalties_for(metric: str) -> tuple:
 def required_fields(metric: str) -> list:
     out: list = []
     for component in list(DEFAULT_WEIGHTS[metric]) + list(penalties_for(metric)):
-        for f in _PER_COMPONENT[component]:
+        for f in _PER_COMPONENT[component] + _GATE_FIELDS.get(component, []):
             if f not in out:
                 out.append(f)
     return out
@@ -612,11 +836,26 @@ def required_fields(metric: str) -> list:
 def all_feature_fields() -> list:
     """Every raw field any metric reads -- the column set for calibration export."""
     out: list = []
-    for fields in _PER_COMPONENT.values():
+    for fields in list(_PER_COMPONENT.values()) + list(_GATE_FIELDS.values()):
         for f in fields:
             if f not in out:
                 out.append(f)
     return out
+
+
+def _apply_gates(component: str, dps: dict, th: dict, base: float):
+    """Apply a component's qualifiers. Returns (gated_score, [gate records])."""
+    applied: list = []
+    score_out = base
+    for gate_fn in GATES.get(component, []):
+        r = _Reader(dps)
+        g = gate_fn(r, th)
+        if g is None:
+            continue
+        score_out *= g.multiplier
+        applied.append({"reason": g.reason, "multiplier": round(g.multiplier, 3),
+                        "_fields": g.fields_used})
+    return score_out, applied
 
 
 def _confidence(missing: list, dps: dict) -> str:
@@ -653,11 +892,18 @@ def score(
     for name, weight in w.items():
         r = _Reader(dps)
         comp = COMPONENTS[name](r, th)
-        components[name] = {"score": round(comp.score, 4),
-                            "weight": round(weight / total, 4), "basis": comp.basis}
+        gated, applied = _apply_gates(name, dps, th, comp.score)
+        entry = {"score": round(gated, 4), "weight": round(weight / total, 4),
+                 "basis": comp.basis}
+        if applied:
+            entry["ungated_score"] = round(comp.score, 4)
+            entry["gates"] = applied
+            for g in applied:
+                used += g.pop("_fields", [])
+        components[name] = entry
         used += comp.fields_used
         missing += comp.fields_missing
-        product *= max(comp.score, 0.0) ** (weight / total)
+        product *= max(gated, 0.0) ** (weight / total)
 
     for name in penalties_for(metric):
         r = _Reader(dps)
