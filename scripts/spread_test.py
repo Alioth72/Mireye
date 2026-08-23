@@ -28,7 +28,8 @@ from phase2 import scoring  # noqa: E402
 from phase2.db import get_engine, init_db  # noqa: E402
 from phase2.models import Site  # noqa: E402
 from phase2.mireye.client import MireyeClient  # noqa: E402
-from phase2.orchestrator import read_or_fetch  # noqa: E402
+from phase2.models import VicinitySummary  # noqa: E402
+from phase2.orchestrator import read_or_fetch, scan_vicinity  # noqa: E402
 
 SITES: list[tuple[str, float, float]] = [
     # --- Seattle city limits, chosen for terrain variety ---
@@ -66,10 +67,23 @@ async def main() -> None:
                     session.commit()
                     session.refresh(site)
 
+                # Vicinity, not a point. A nearest_* field read at one centroid can
+                # only under-report proximity -- that is what made West Seattle read
+                # as a false quiet in the first run of this script.
+                await scan_vicinity(session, client, site, fields, caller_ref="spread_test")
                 answers, outcome = await read_or_fetch(
                     session, client, site, fields, trigger="replay"
                 )
-                result = scoring.score(METRIC, answers)
+                vic = {
+                    v.field_name: {
+                        "best": v.best, "worst": v.worst, "n_answers": v.n_answers,
+                        "fraction_usable": v.fraction_usable, "spread": v.spread,
+                    }
+                    for v in session.exec(
+                        select(VicinitySummary).where(VicinitySummary.site_id == site.id)
+                    ).all()
+                }
+                result = scoring.score(METRIC, answers, vicinity=vic or None)
                 rows.append((label, result))
                 if outcome.error:
                     print(f"  ! {label}: {outcome.error}", file=sys.stderr)

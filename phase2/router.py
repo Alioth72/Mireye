@@ -18,7 +18,7 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field, model_validator
 from sqlmodel import Session, select
 
-from . import catalog, scoring, vicinity as vicinity_mod
+from . import catalog, scoring, verify as verify_mod, vicinity as vicinity_mod
 from .bundles import (
     BUNDLES,
     MAX_FIELDS_PER_FETCH,
@@ -681,6 +681,45 @@ def list_profiles(session: Session = Depends(get_session)) -> dict[str, Any]:
             for r in rows
         ],
     }
+
+
+# --------------------------------------------------------------------------
+# narrative cross-check
+# --------------------------------------------------------------------------
+class VerifyRequest(BaseModel):
+    metric: str = "data_center_optionality"
+    limit: int = 3
+
+
+@router.post("/sites/{site_id}/verify", tags=["verify"])
+async def verify_site_endpoint(
+    site_id: str,
+    body: VerifyRequest,
+    session: Session = Depends(get_session),
+    client: MireyeClient = Depends(get_client),
+) -> dict[str, Any]:
+    """Cross-check a scored site against Mireye's own synthesizer.
+
+    The narrative NEVER feeds the score -- it sits beside it. Phase 2's score must stay
+    a pure function of fetched values so it is reproducible and so weight calibration
+    means something. This exists because `intersects_protected_area: True` scored a
+    municipal golf course as hard-disqualified, and asking the same question in prose
+    would have caught it immediately.
+    """
+    if body.metric not in scoring.METRICS:
+        raise HTTPException(404, {"error": "unknown_metric", "message": body.metric})
+    site = _get_site(session, site_id)
+
+    answers, _ = await read_or_fetch(
+        session, client, site, scoring.required_fields(body.metric), trigger="cache_miss"
+    )
+    vic = _vicinity_map(session, site_id)
+    result = scoring.score(body.metric, answers, vicinity=vic or None)
+
+    checked = await verify_mod.verify_site(
+        client, site.lat, site.lng, result, limit=body.limit
+    )
+    return {"site_id": site_id, **checked}
 
 
 # --------------------------------------------------------------------------

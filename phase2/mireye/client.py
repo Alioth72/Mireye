@@ -217,6 +217,131 @@ class MireyeClient:
         )
         return GeocodeResponse.model_validate(data)
 
+    async def proximity_nearest(
+        self,
+        curated_set: str,
+        lat: float,
+        lng: float,
+        *,
+        n: int = 5,
+        filters: dict | None = None,
+    ) -> dict:
+        """Authoritative nearest facility over a FIXED 160 km search radius.
+
+        This is the endpoint that answers definitively what a point field could not:
+        `nearest_transmission_line_voltage_kv` returned `absent` at West Seattle because
+        the source's own search radius did not reach, not because no line exists.
+
+        Straightline mode is free above the 2-credit floor, and nothing qualifying
+        returns empty `candidates` rather than an error.
+
+        NOTE: `applied_filters` echoes exactly what you SENT, not the default that ran --
+        `@substations` applies a 115 kV floor whether or not you asked, and unrated
+        substations stay excluded regardless. Pass `filters` explicitly if you need the
+        response to state the threshold.
+        """
+        req: dict[str, Any] = {
+            "op": "nearest",
+            "set": curated_set if curated_set.startswith("@") else f"@{curated_set}",
+            # Locators are STRINGS -- a coordinate or a street address, never a place
+            # name. Coordinates skip the accuracy gate, cost no geocoding credit, and
+            # cannot drift, so prefer them for anything resolved repeatedly.
+            "origin": f"{lat},{lng}",
+            "n": n,
+            "mode": "straightline",
+        }
+        if filters:
+            req["filters"] = filters
+        data, _ = await self._post(
+            "/v1/proximity", req, timeout=self.settings.phase2_fetch_timeout_s
+        )
+        return data
+
+    async def ask(
+        self,
+        question: str,
+        *,
+        lat: float | None = None,
+        lng: float | None = None,
+        address: str | None = None,
+        include_trace: bool = True,
+    ) -> dict:
+        """The LLM path -- planner, deterministic fetch, synthesizer, citation extraction.
+
+        Used as a CROSS-CHECK, never as a scoring input: the score must stay a pure
+        function of fetched values so it is reproducible and so calibration works.
+
+        Two things to read from the response:
+          * ``data_gaps`` is the authoritative missing-field array, computed from the
+            fetch result rather than from the prose -- read it instead of diffing
+            ``trace.fields_requested`` against ``fields_used``.
+          * ``confidence`` auto-downgrades one bucket when >30% of planner-selected
+            fields came back null, regardless of what the synthesizer self-reported.
+
+        The planner caps at 15 fields, so ask narrow questions rather than
+        "assess this site".
+        """
+        payload: dict[str, Any] = {"question": question, "include_trace": include_trace}
+        if address:
+            payload["address"] = address
+        else:
+            payload["lat"], payload["lng"] = lat, lng
+        # Server hard bound is 110 s; a shorter client timeout aborts otherwise-good
+        # requests AND leaves them running and billing server-side.
+        data, _ = await self._post(
+            "/v1/ask", payload, timeout=max(self.settings.phase2_ask_timeout_s, 120.0)
+        )
+        return data
+
+    async def lookup(self, text: str) -> dict:
+        """Messy locator -> canonical join keys, parcel, and free context.
+
+        `disposition` must be checked FIRST: `clarify` means present candidates and
+        never auto-pick; `no_match` means read reason/hint and ask.
+        """
+        data, _ = await self._post(
+            "/v1/lookup", {"input": text}, timeout=self.settings.phase2_geocode_timeout_s
+        )
+        return data
+
+    async def submit_run(self, locations: list, fields: list) -> dict:
+        """Async fetch_batch. Returns 202 + run_id immediately.
+
+        Caller mistakes fail at SUBMIT, not in the background, so a run never exists
+        only to fail on something validation could have caught.
+        """
+        data, _ = await self._post(
+            "/v1/runs",
+            {"kind": "fetch_batch", "request": {"locations": locations, "fields": fields}},
+            timeout=self.settings.phase2_meta_timeout_s,
+        )
+        return data
+
+    async def get_run(self, run_id: str) -> dict:
+        """Poll. `status`: queued -> running -> done | failed. The source of truth."""
+        request_id = _new_request_id()
+        response = await self.client.get(
+            f"/v1/runs/{run_id}", headers=self._headers(request_id),
+            timeout=self.settings.phase2_meta_timeout_s,
+        )
+        self._raise_for_error(response, request_id)
+        return response.json()
+
+    async def run_artifact(self, run_id: str, kind: str = "csv") -> str:
+        """Rendered on read from the stored result, never stored separately.
+
+        The CSV is one row per location, index-aligned, identity columns plus one
+        column per field value, plus a `failed_fields` column naming what to distrust --
+        which is exactly the shape weight calibration needs.
+        """
+        request_id = _new_request_id()
+        response = await self.client.get(
+            f"/v1/runs/{run_id}/artifacts/{kind}", headers=self._headers(request_id),
+            timeout=self.settings.phase2_batch_timeout_s,
+        )
+        self._raise_for_error(response, request_id)
+        return response.text
+
     async def meta_fields(self, etag: str | None = None) -> tuple[dict[str, Any] | None, str | None]:
         """Public endpoint -- no token needed. Returns (payload, etag); payload is None
         on a 304 so the caller keeps its cached copy."""

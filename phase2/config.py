@@ -26,6 +26,9 @@ class Settings(BaseSettings):
     # A batch is 25 fetches' worth of work processed 4 at a time; the reference says
     # worst case ~90 s and "set timeout 120 s+".
     phase2_batch_timeout_s: float = 180.0
+    # /v1/ask has a 110 s server hard bound; a shorter client timeout aborts
+    # otherwise-successful requests and leaves them running server-side.
+    phase2_ask_timeout_s: float = 150.0
     phase2_meta_timeout_s: float = 10.0
 
     # --- Storage ------------------------------------------------------------
