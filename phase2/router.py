@@ -10,9 +10,11 @@ before the catch-all ``/{bundle}`` path, because FastAPI matches in declaration 
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, AsyncIterator, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field, model_validator
 from sqlmodel import Session, select
 
@@ -121,6 +123,16 @@ def _outcome_payload(outcome) -> dict[str, Any]:
 # --------------------------------------------------------------------------
 # health, catalog, bundles
 # --------------------------------------------------------------------------
+_UI = Path(__file__).parent / "static" / "index.html"
+
+
+@router.get("/ui", response_class=HTMLResponse, include_in_schema=False)
+def ui() -> HTMLResponse:
+    """Small operator UI. Served from the router so it survives the Phase 3 merge --
+    mounting at /v1/ui rather than / keeps the app root free for Phase 3."""
+    return HTMLResponse(_UI.read_text(encoding="utf-8"))
+
+
 @router.get("/healthz", tags=["ops"])
 def healthz() -> dict[str, Any]:
     settings = get_settings()
