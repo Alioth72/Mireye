@@ -96,6 +96,31 @@ Fixed latitude **28.5°N**, longitude swept across the continental US:
 
 9 of 9. The match is a function of latitude alone.
 
+**Affected real cities** (same two fields, one batch):
+
+| City | lat | result |
+|---|---|---|
+| Corpus Christi TX | 27.80 | Papahanaumokuakea, GAP 2 |
+| Tampa FL | 27.95 | Papahanaumokuakea, GAP 2 |
+| Houston TX | 29.76 | Papahanaumokuakea, GAP 2 |
+| New Orleans LA | 29.95 | Papahanaumokuakea, GAP 2 |
+| Jacksonville FL | 30.33 | Papahanaumokuakea, GAP 2 |
+| Baton Rouge LA | 30.45 | Papahanaumokuakea, GAP 2 |
+| Mobile AL | 30.70 | Papahanaumokuakea, GAP 2 |
+| El Paso TX | 31.76 | correct (`false` / `null`) |
+| Savannah GA | 32.08 | correct (`false` / `null`) |
+| Tucson AZ | 32.22 | correct (`false` / `null`) |
+
+Savannah is instructive: it lies **east** of Jacksonville but 1.7° further north, and is
+unaffected. The north edge therefore sits between 31.25°N (affected) and 31.76°N (clean).
+
+**Extent outside US longitudes is untestable.** `/v1/fetch` rejects anything beyond
+`lng -180 to -65` with `400 coord_out_of_bounds` ("V1 supports US coordinates only"), so a
+same-latitude control such as Cairo (30.04°N, 31.24°E) cannot be run. The claim here is
+therefore bounded: within every longitude the API accepts, the match depends on latitude
+alone. Whether the underlying polygon is unbounded further afield cannot be determined
+from the API surface.
+
 ---
 
 ## Incidence
@@ -132,8 +157,9 @@ and points in open water, also returned the monument.
 ## Hypothesis (offered tentatively — we cannot distinguish these from outside)
 
 The observed behaviour is consistent with the Papahanaumokuakea polygon having lost or
-wrapped its **longitude** bound, leaving a latitude-only band that matches globally. Its
-real latitude extent (~22.75–29.5°N) sits close to the observed band (~25.3–31.6°N).
+wrapped its **longitude** bound, leaving a latitude-only band across the whole testable
+longitude range. Its real latitude extent (~22.75–29.5°N) sits close to the observed band
+(~25.3–31.6°N).
 
 Whether the defect originates in the PAD-US join or in the USGS PAD-US 4.1 source data is
 not something we can determine from the API surface.
