@@ -72,6 +72,10 @@ class _Rec:
         self.notes = rec.notes
         self.unit = rec.unit
         self.dataset_vintage = rec.dataset_vintage
+        # store.serialize() reads these on failed fields; a stand-in that omits them
+        # blows up exactly when a field fails, which is when you most want the row.
+        self.error = getattr(rec, "error", None)
+        self.retryable = getattr(rec, "retryable", None)
 
 
 async def _via_runs(client: MireyeClient, chunk: list, fields: list) -> list:
