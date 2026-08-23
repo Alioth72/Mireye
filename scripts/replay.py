@@ -15,7 +15,8 @@ Usage:
 """
 
 from __future__ import annotations
-
+from dotenv import load_dotenv
+load_dotenv()
 import argparse
 import asyncio
 from datetime import datetime

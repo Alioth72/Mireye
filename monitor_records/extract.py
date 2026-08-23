@@ -82,7 +82,49 @@ class ExtractedEvent(BaseModel):
     geographic_scope: ExtractedGeography | None = None
     evidence: list[ExtractedEvidence] = Field(default_factory=list)
     confidence: float = 0.0
-
+GEMINI_RESPONSE_SCHEMA: dict = {
+    "type": "OBJECT",
+    "properties": {
+        "is_material_event": {"type": "BOOLEAN"},
+        "event_type": {
+            "type": "STRING",
+            "enum": [e.value for e in EventType],
+            "nullable": True,
+        },
+        "title": {"type": "STRING", "nullable": True},
+        "description": {"type": "STRING", "nullable": True},
+        "subject": {"type": "STRING", "nullable": True},
+        "stage": {
+            "type": "STRING",
+            "enum": [s.value for s in EventStage],
+            "nullable": True,
+        },
+        "geographic_scope": {
+            "type": "OBJECT",
+            "nullable": True,
+            "properties": {
+                "type": {"type": "STRING", "description": "JURISDICTION | POINT | POLYGON | UNRESOLVED"},
+                "name": {"type": "STRING", "nullable": True},
+                "latitude": {"type": "NUMBER", "nullable": True},
+                "longitude": {"type": "NUMBER", "nullable": True},
+            },
+            "required": ["type"],
+        },
+        "evidence": {
+            "type": "ARRAY",
+            "items": {
+                "type": "OBJECT",
+                "properties": {
+                    "text": {"type": "STRING"},
+                    "reason": {"type": "STRING"},
+                },
+                "required": ["text", "reason"],
+            },
+        },
+        "confidence": {"type": "NUMBER"},
+    },
+    "required": ["is_material_event", "confidence"],
+}
 
 def build_prompt(document_type: str, title: str | None, date: str | None, source_url: str | None, raw_text: str) -> str:
     return USER_PROMPT_TEMPLATE.format(
@@ -93,10 +135,21 @@ def build_prompt(document_type: str, title: str | None, date: str | None, source
         raw_text=raw_text,
     )
 
-
 def call_llm_extract(document_type: str, title: str | None, date: str | None, source_url: str | None, raw_text: str) -> ExtractedEvent:
-    """Calls the Gemini API for structured event extraction."""
-    import google.generativeai as genai
+    """Calls the Gemini API for structured event extraction.
+
+    Requires GEMINI_API_KEY in the environment. Passes ExtractedEvent
+    directly as response_schema -- response_mime_type alone only guarantees
+    valid JSON *syntax*, not that it matches OUR schema (field names, enum
+    values, nesting). response_schema constrains the model's output to
+    actually conform, instead of just hoping the prompt was followed.
+
+    Raises RuntimeError if the key is missing, the call fails, or the
+    response doesn't validate against ExtractedEvent -- callers (ingest.py)
+    should catch this and fall back to the deterministic-only / heuristic
+    path rather than crash the whole ingest run on one bad document.
+    """
+    import google.generativeai as genai  # local import: keep this an optional dependency
 
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
@@ -113,10 +166,12 @@ def call_llm_extract(document_type: str, title: str | None, date: str | None, so
         prompt,
         generation_config=genai.GenerationConfig(
             response_mime_type="application/json",
+            response_schema=GEMINI_RESPONSE_SCHEMA,
         ),
     )
 
     raw = (response.text or "").strip()
+    # strip stray markdown fences defensively, even with response_schema set
     if raw.startswith("```"):
         raw = raw.strip("`")
         if raw.startswith("json"):
