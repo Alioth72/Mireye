@@ -1,0 +1,35 @@
+{
+  "event": {
+    "id": "demo-county-2026-06-09-dc-moratorium-low",
+    "type": "data_center_moratorium",
+    "stage": "adopted",
+    "title": "Adopted data-center moratorium",
+    "jurisdiction": "Demo County",
+    "published_at": "2026-06-09T22:15:00Z",
+    "source_url": "https://example.gov/agendas/2026-06-09",
+    "source_quote": "The board adopted an emergency moratorium on new data centers.",
+    "scope": {
+      "relation_to_site": "inside",
+      "distance_m": 0,
+      "description": "County limits"
+    }
+  },
+  "site": {
+    "id": "site-low-optionality",
+    "lat": 47.6,
+    "lng": -122.3,
+    "label": "Constrained monitored coordinate"
+  },
+  "mireye": {
+    "fields": {
+      "nearest_transmission_line_voltage_kv": {"value": 69, "unit": "kV"},
+      "nearest_transmission_line_distance_m": {"value": 25000, "unit": "m"},
+      "nearest_substation_distance_m": {"value": 35000, "unit": "m"},
+      "fiber_broadband_available": {"value": false},
+      "slope_degrees": {"value": 18, "unit": "degrees"},
+      "within_floodplain_polygon": {"value": true},
+      "intersects_wetland": {"value": true},
+      "intersects_protected_area": {"value": false}
+    }
+  }
+}

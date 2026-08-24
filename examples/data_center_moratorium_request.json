@@ -1,0 +1,65 @@
+{
+  "event": {
+    "id": "demo-county-2026-06-09-dc-moratorium",
+    "type": "data_center_moratorium",
+    "stage": "proposed",
+    "title": "First reading of data-center moratorium",
+    "jurisdiction": "Demo County",
+    "published_at": "2026-06-09T22:15:00Z",
+    "source_url": "https://example.gov/agendas/2026-06-09",
+    "source_quote": "The board introduced an emergency moratorium on accepting applications for new data centers.",
+    "detected_terms": ["data center", "moratorium", "emergency ordinance"],
+    "scope": {
+      "relation_to_site": "inside",
+      "distance_m": 0,
+      "description": "County limits"
+    }
+  },
+  "site": {
+    "id": "site-high-optionality",
+    "lat": 47.6062,
+    "lng": -122.3321,
+    "label": "High-optionality monitored coordinate"
+  },
+  "mireye": {
+    "fields": {
+      "nearest_transmission_line_voltage_kv": {
+        "value": 230,
+        "unit": "kV",
+        "source": "EIA Energy Atlas",
+        "source_url": "https://www.eia.gov/maps/layer_info-m.php"
+      },
+      "nearest_transmission_line_distance_m": {
+        "value": 1100,
+        "unit": "m",
+        "source": "EIA Energy Atlas"
+      },
+      "nearest_substation_distance_m": {
+        "value": 2600,
+        "unit": "m",
+        "source": "EIA Energy Atlas"
+      },
+      "fiber_broadband_available": {
+        "value": true,
+        "source": "FCC Broadband Data Collection"
+      },
+      "slope_degrees": {
+        "value": 2.1,
+        "unit": "degrees",
+        "source": "USGS 3DEP"
+      },
+      "within_floodplain_polygon": {
+        "value": false,
+        "source": "FEMA NFHL"
+      },
+      "intersects_wetland": {
+        "value": false,
+        "source": "USFWS NWI"
+      },
+      "intersects_protected_area": {
+        "value": false,
+        "source": "USGS PAD-US"
+      }
+    }
+  }
+}

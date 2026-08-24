@@ -1,0 +1,20 @@
+[project]
+name = "mireye-monitor"
+version = "0.1.0"
+description = "Materiality scoring and alert decisions for public-record land monitoring events."
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+mireye-monitor = "monitor_decision.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
