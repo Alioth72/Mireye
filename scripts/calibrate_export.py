@@ -34,6 +34,7 @@ from phase2.mireye.client import MireyeClient  # noqa: E402
 from phase2.mireye.schemas import MireyeError  # noqa: E402
 
 BATCH = 25          # hard cap on locations per batch/run
+FIELD_CHUNK = 48    # hard cap is 50 explicit fields; leave headroom
 POLL_SECONDS = 5
 MAX_POLLS = 120
 
@@ -78,6 +79,26 @@ class _Rec:
         self.retryable = getattr(rec, "retryable", None)
 
 
+async def _fetch_all_fields(client: MireyeClient, locations: list, fields: list) -> dict:
+    """Fetch `fields` for `locations`, splitting across the 50-explicit-field cap.
+
+    The feature set grows every time a scoring component is added — it crossed 50 the
+    moment the protected-area plausibility inputs landed — so chunking here rather than
+    trimming the field list keeps the export working as scoring evolves.
+
+    Returns `{location_index: {field: record}}`, merged across chunks.
+    """
+    merged: dict = {}
+    for start in range(0, len(fields), FIELD_CHUNK):
+        part = fields[start:start + FIELD_CHUNK]
+        for index, response, error in await client.fetch_batch(locations, part):
+            if error is not None:
+                merged.setdefault(index, {})   # keep the slot; caller reports the gap
+                continue
+            merged.setdefault(index, {}).update(response.fields)
+    return merged
+
+
 async def _via_runs(client: MireyeClient, chunk: list, fields: list) -> list:
     """Submit as a run and poll. Caller mistakes fail at SUBMIT, not in the background."""
     locations = [{"lat": s["lat"], "lng": s["lng"]} for s in chunk]
@@ -117,11 +138,12 @@ async def main() -> None:
             print(f"  batch {start // BATCH + 1}: {len(chunk)} sites", flush=True)
             try:
                 if use_sync:
+                    by_index = await _fetch_all_fields(
+                        client, [{"lat": s["lat"], "lng": s["lng"]} for s in chunk], fields
+                    )
                     results = [
-                        (i, resp, err)
-                        for i, resp, err in await client.fetch_batch(
-                            [{"lat": s["lat"], "lng": s["lng"]} for s in chunk], fields
-                        )
+                        (i, type("R", (), {"fields": f})(), None if f else {"error": "no fields"})
+                        for i, f in sorted(by_index.items())
                     ]
                 else:
                     raw = await _via_runs(client, chunk, fields)

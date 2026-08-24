@@ -87,13 +87,35 @@ def test_strict_conservation_on_developed_suburbia_is_distrusted() -> None:
     assert "self-contradictory" in why
 
 
-def test_federal_conservation_on_private_land_is_distrusted() -> None:
+def test_state_managed_wilderness_is_NOT_distrusted() -> None:
+    """REGRESSION. An earlier version distrusted any GAP 1/2 record whose
+    surface_management_agency read private_or_unknown. That field tracks FEDERAL surface
+    management, so state parks, state forest preserves and NGO preserves legitimately
+    have none while being genuinely protected.
+
+    Adirondack High Peaks Wilderness is the case that caught it: GAP 1, New York State
+    Forest Preserve, constitutionally "forever wild", 0.5 homes/km2 of Forest. The gate
+    wrongly cleared it and its score rose from 0.005 to 0.185 -- ignoring real protection,
+    which is the same class of error as the golf course, arriving from the other side."""
+    trusted, _ = protected_record_trustworthy(
+        reader(protected_area_name="High Peaks Wilderness", political_region="New York",
+               protected_area_gap_status=1, surface_management_agency="private_or_unknown",
+               land_use_class="Forest", housing_units_density_per_km2=0.48)
+    )
+    assert trusted is True
+
+
+def test_federal_agency_signal_only_corroborates() -> None:
+    """It may sharpen a developed-land finding; it may never trigger one alone."""
     trusted, why = protected_record_trustworthy(
         reader(protected_area_name="Some Refuge", political_region="Ohio",
-               protected_area_gap_status=1, surface_management_agency="private_or_unknown")
+               protected_area_gap_status=2, land_use_class="Developed",
+               housing_units_density_per_km2=898.0,
+               surface_management_agency="private_or_unknown")
     )
     assert trusted is False
-    assert "surface management" in why
+    assert "Developed land" in why
+    assert "surface management also reads" in why
 
 
 def test_gap4_parkland_in_a_town_is_NOT_distrusted() -> None:

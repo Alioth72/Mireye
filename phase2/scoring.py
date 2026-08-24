@@ -451,16 +451,23 @@ def protected_record_trustworthy(r: _Reader) -> tuple:
     density, _ = r.get("housing_units_density_per_km2")
     agency, _ = r.get("surface_management_agency")
 
-    if strict and str(land).lower() == "developed" and density is not None             and float(density) > 200:
-        return False, (
+    if strict and str(land).lower() == "developed" and density is not None \
+            and float(density) > 200:
+        detail = (
             f"GAP {int(gap)} conservation unit reported on Developed land at "
             f"{float(density):.0f} homes/km2 -- self-contradictory, record distrusted"
         )
-    if strict and agency and str(agency).lower() == "private_or_unknown":
-        return False, (
-            f"GAP {int(gap)} federal conservation unit reported where surface "
-            f"management is '{agency}' -- self-contradictory, record distrusted"
-        )
+        # `surface_management_agency` corroborates but is NEVER sufficient alone. It
+        # tracks FEDERAL surface management, so state parks, state forest preserves and
+        # NGO preserves legitimately read `private_or_unknown` while being genuinely
+        # protected. Adirondack High Peaks Wilderness -- GAP 1, New York State's
+        # constitutionally "forever wild" Forest Preserve, 0.5 homes/km2, Forest land --
+        # is exactly that case, and an earlier version of this check wrongly distrusted
+        # it. Over-triggering here re-breaks the problem from the other side by ignoring
+        # real protection, which is the same class of error as the golf course.
+        if agency and str(agency).lower() == "private_or_unknown":
+            detail += f" (surface management also reads '{agency}')"
+        return False, detail
     return True, ""
 
 
