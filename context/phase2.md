@@ -528,6 +528,203 @@ hears "these are current-state fields and here is the exposure" trusts the lead-
 
 ---
 
+### D23 - Vicinity, not a point, is the measurement unit
+
+**Decision.** Every site is measured as a centroid plus 8 bearings x 3 rings
+(250 / 750 / 1500 m) = exactly 25 locations, one `/v1/fetch/batch` call.
+
+**Alternatives rejected.** Single-coordinate fetch, the original design.
+
+**Rationale.** Build Brief II says *"one vicinity fetch"* and *"everything within reach of
+that coordinate."* Point sampling is **asymmetric**: a `nearest_*` field measured at one
+centroid can only ever UNDER-report proximity, never over-report it. So it manufactures
+**false quiets**, the worst error this product can make, because the landowner is never
+warned.
+
+Not theoretical. West Seattle bluff scored 0.277 on a point and was published as a `quiet`
+case; a ring around the same coordinate finds 230 kV at 1.3 km, present at 4 of 25 sample
+points. Rescored on vicinity data it reaches **0.911** - alert, not quiet. Two of the three
+`quiet` cases in the original R1 result were this same artefact.
+
+**Consequence.** Fields now carry a class, because the ring is **not** the owner's parcel
+and conflating them was the original mistake:
+
+| Class | Examples | Aggregation | Why |
+|---|---|---|---|
+| **connectable** | transmission, substation, pipeline, road, rail, brownfield | best across the ring | you REACH this; you do not own it |
+| **intrinsic** | slope, floodplain, protected, karst, canopy | best + worst + usable fraction | a flat pad 1.5 km away does nothing for a steep parcel |
+| **regional** | climate, grid carbon, price, incentives | centroid only | uniform at this scale |
+
+An intrinsic field **never collapses to one number**. Parcel fields cost 300 credits and are
+out of scope, so we cannot know the real boundary, and a fraction plus a spread is honest
+where a single value pretends to describe a hundred acres. West Seattle now reads
+*"slope 0.7-43.7 deg, 84% of sampled ground usable"* instead of *"slope 2.4 deg."*
+
+Tri-state semantics survive aggregation: absent at EVERY point is a real "nothing here";
+absent at some is a coverage artefact, and the summary says which.
+
+**Reversal cost.** High. Reverting to point sampling reinstates the false-quiet class.
+
+---
+
+### D24 - Components carry gates, because Mireye fields form permitting chains
+
+**Decision.** A component can be discounted by qualifier fields attached to it. A gated
+score always reports `ungated_score` plus every gate applied and why.
+
+**Alternatives rejected.** Treating each field as an independent input to a weighted mean.
+
+**Rationale.** Several fields are meaningless without a qualifier, and some gate others
+outright:
+
+```
+btm_gas_candidacy_flag = True
+   ... but only if in_air_quality_nonattainment = False   (else NNSR + offsets)
+   ... and nearest_class_i_area_distance_m > ~300 km      (else PSD + FLM consultation)
+```
+
+Scoring gas candidacy without checking Class I proximity claims a gas plant is viable when
+it may not be **permittable**. Likewise `slope_degrees` alone says flat ground is buildable
+when it may be karst, high landslide susceptibility, or seismic category D/E/F.
+
+**Gates implemented:** `btm_fuel` from Class I proximity and nonattainment/maintenance;
+`terrain` from landslide index, seismic category, karst exposure; `power` from
+interconnection queue congestion.
+
+**Consequence.** A regional finding fell out immediately: Alpine Lakes and Mount Rainier are
+both inside the ~300 km PSD screening radius, so **behind-the-meter gas is hard everywhere
+in western Washington**. That constrains the energy-park thesis in this region, and it only
+surfaced because the gate exists.
+
+Also corrected a direction error: `interconnection_queue_active_capacity_county_mw` was
+going to be read as a positive market signal. Mireye: *"Heavy active queue = constrained
+headroom + study-delay risk."* It is a negative.
+
+**Reversal cost.** Low mechanically; high in judgement - it fixes an error class rather than
+individual cases.
+
+---
+
+### D25 - Every threshold is sourced from Mireye's `interpretation_hints`
+
+**Decision.** No band enters `scoring.py` without a documented source, cited inline.
+
+**Rationale.** An earlier version invented its bands and produced two real errors:
+
+* A municipal golf course (PAD-US GAP 4) scored as hard-disqualified at 0.046. Mireye:
+  *"4 ~ nominal - no mandate to prevent conversion (city parks, military). **Do NOT
+  overstate GAP 4 as a development constraint.**"*
+* Slope penalised from 10 degrees. Mireye: *"Slope >25 deg complicates conventional
+  construction."* Downtown Seattle's 12.6 deg is ordinary urban ground.
+
+Also demoted `fiber_broadband_available` from a 0.25-weight term to a floor. It is
+mass-market consumer FTTP, *"an availability FLOOR, NOT an interconnect-ecosystem signal"*,
+and it was `True` at all ten original test sites, so it discriminated nothing.
+
+**Consequence.** Adding a band now requires reading the hint first. Slower, and the point.
+
+---
+
+### D26 - Protected-area records are checked for plausibility before they are trusted
+
+**Decision.** Two guards, and the split matters. A named quarantine for a known-defective
+upstream record, plus a generic self-contradiction check.
+
+**Rationale.** See risk R8. Mireye's PAD-US join returns a Pacific marine monument for every
+coordinate in a latitude band across the Gulf coast. The failure is **silent**:
+`status: ok`, normal confidence, nothing anomalous. Nothing downstream had any signal to
+distrust it.
+
+* The **named quarantine** is exact, cheap, and marked in code as a vendor workaround to
+  delete once Mireye confirms a fix.
+* The **self-contradiction check** is the durable half: a GAP 1/2 conservation unit does not
+  contain `Developed` land at ~900 homes/km2, and is not federally managed while
+  `surface_management_agency` reads `private_or_unknown`. It knows nothing about Hawaii, so
+  it keeps working for defects nobody has found yet.
+
+**Consequence.** San Antonio 0.108 to 0.542, Houston 0.509, Miami 0.508. The penalty is
+**not dropped silently** - the basis reads `protected-area record IGNORED: ... known
+upstream PAD-US defect`, so the reason travels into the alert. A genuine Yellowstone GAP-1
+record still collapses the score, and GAP-4 parkland in a town is deliberately NOT
+distrusted, since over-triggering would re-break the Interbay case from the other side.
+
+---
+
+### D27 - An agent hierarchy, with agents choosing and deterministic code computing
+
+**Decision.** `phase2/agents/` - Coordinator, Scout, Executor, Verifier, Analyst.
+
+```
+Coordinator      owns the loop and the stopping condition -- no model
+|-- Scout        decides WHAT to look at next -- mostly deterministic rules
+|-- Executor     the only agent that touches Mireye -- no model, ever
+|-- Verifier     challenges extreme scores against Mireye's synthesizer
++-- Analyst      says what is decisive/uncertain -- produces no verdict
+```
+
+**Rationale.** Both historical bugs were adaptive-investigation failures, not field-list
+failures: the *first* answer told you what the *second* question should be. A fixed field
+list cannot express that.
+
+**Two rules hold it together:**
+
+1. **Agents choose what to investigate; deterministic code fetches and scores.** Numbers
+   stay reproducible, which is what makes weight calibration mean anything.
+2. **No agent may overturn a computed score.** Reviewers flag disagreement; they never edit
+   arithmetic.
+
+**The Coordinator owns the stopping condition, and it is deliberately not the model's
+call.** An agent asked to judge its own sufficiency will occasionally decide it needs one
+more look, forever. Stopping is a budget question and a "did the last round change
+anything" question, both cheaper and more reliable in code.
+
+**Consequence.** `POST /v1/sites/{id}/investigate` returns the full trace - every action,
+its rationale, and which model (if any) was involved. An investigation nobody can read back
+is indistinguishable from a guess.
+
+The Scout is **mostly deterministic on purpose**: Mireye's own hints say "check
+`voltage_class`", "read `gap_status`", so a rules table encodes them faithfully and for
+free. The model tier is the residual case.
+
+---
+
+### D28 - Analysis, not verdicts
+
+**Decision.** `phase2/analyst.py` produces structured analysis with **no verdict field**. No
+`recommendation`, no `good`/`bad`, no alert/quiet. The schema has nowhere to put one.
+
+**Rationale.** Phase 3 will not decide on a score alone, and a number like `0.911` reads as
+a judgement when what they need is the reasoning material: what is decisive, what varies
+across a set and what does not, what we do not know. *"Every site in this set has 115-230 kV
+within 2 km, so power is not what separates them"* is a reading of a table, not a threshold
+output.
+
+**Consequence.** Scores remain - they are useful, and they are the calibration target.
+Analysis is additive. If a field in that schema ever starts to smell like a conclusion, the
+boundary is leaking.
+
+---
+
+### D29 - Model tiering by task
+
+**Decision.**
+
+| Task | Model | Why |
+|---|---|---|
+| `set_analysis` | `gpt-5` | comparative reasoning over 20+ sites x 50 fields; must tell "these places are alike" from "these places were badly chosen" |
+| `site_analysis` | `gpt-5-mini` | one site, bounded context, largely reading values off a block |
+| `triage` | `gpt-5-nano` | short mechanical judgements |
+
+**Rationale.** Paying frontier rates for bounded summarisation is waste. Overridable per
+task via `PHASE2_MODEL_*`.
+
+**Consequence.** Anything fully mechanical calls **no model at all** - coverage artefacts,
+staleness and absent-vs-missing are computed deterministically, and a model would add cost
+and variance for no information.
+
+
+---
+
 ## 4. Data model
 
 All tables prefixed `p2_` (D17). SQLite (D18).
@@ -810,6 +1007,25 @@ decision.
 
 **R6 — `credits_exhausted` (402).** A hard stop, not overage billing — the request is simply
 not served. Must degrade gracefully mid-demo: serve the cached snapshot, mark it stale, say so.
+
+**R8 - Upstream Mireye defect corrupts `protected_area_*` across the Gulf coast.**
+Every coordinate between ~25.3N and ~31.6N returns `intersects_protected_area: true` with
+`protected_area_name: Papahanaumokuakea Marine National Monument` - a Pacific marine reserve
+4,400-5,550 miles away - **regardless of longitude**. Confirmed at Houston, New Orleans,
+Jacksonville, Tampa, Mobile, Baton Rouge, Corpus Christi, Miami and San Antonio; El Paso,
+Savannah and Tucson (all north of 31.7N) are clean. Savannah is the clearest proof: east of
+Jacksonville, 1.7 degrees further north, unaffected.
+
+Not caller-side. The reproduction supplies **addresses only**, so Mireye does its own
+geocoding, and the same response correctly reports `political_region: Texas`,
+`iso_rto: ERCOT`, `elevation: 196.6 m`. Only the `protected_area_*` group is wrong.
+
+**The failure is silent** (`status: ok`, normal confidence), which is what makes it
+dangerous - it applies a GAP-2 penalty with no signal to distrust it. Mitigated by D26.
+Full write-up with reproduction steps: `Plan/mireye-bug-report-padus-latitude-band.md`.
+
+**Material for calibration:** fitting weights over data-centre coordinates in that band
+would learn a spurious "data centres avoid protected land" signal from a Hawaiian polygon.
 
 **R7 — Boundary erosion.** If an `?event_type=` parameter appears on a Phase 2 endpoint, D1 has
 leaked and the D6 credit story stops being provable.
