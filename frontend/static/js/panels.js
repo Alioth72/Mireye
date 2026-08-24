@@ -233,7 +233,7 @@ function firedHeadline(index) {
     case GATE_GEO:
       return "The event's geography does not reach this site. Nothing physical was measured here.";
     case GATE_PHYSICAL:
-      return "This ground never had the option. The record IS final and it DOES cover this site — the site's own physical profile is why there is no alert.";
+      return "The physical score did not clear the alert threshold. Review weak and unknown components below; SILENCE is not proof that development is impossible.";
     default:
       return null;
   }
@@ -341,12 +341,13 @@ function worstKey(rows) {
 
 export function renderFeed(events, options = {}) {
   const host = byId("event-feed");
-  if (!host) return;
+  if (!host) return 0;
   try {
-    renderFeedInner(host, events, options);
+    return renderFeedInner(host, events, options);
   } catch (err) {
     // A render bug must never take the console down; app.js awaits this call.
     console.error("[panels] renderFeed failed", err);
+    return 0;
   }
 }
 
@@ -358,6 +359,7 @@ function renderFeedInner(host, events, options) {
   const stageFilter = String(filters?.stage || "").toUpperCase();
   const showSilenced = filters?.showSilenced !== false;
 
+  let rendered = 0;
   for (const event of list) {
     if (!event) continue;
     if (stageFilter && String(event.stage || "").toUpperCase() !== stageFilter) continue;
@@ -409,7 +411,9 @@ function renderFeedInner(host, events, options) {
     }
 
     host.appendChild(item);
+    rendered += 1;
   }
+  return rendered;
 }
 
 /* ── sites ────────────────────────────────────────────────────────────────── */
@@ -506,6 +510,46 @@ export function renderDecisionEmpty(message) {
   host.appendChild(el("p", "empty", txt(message || "Select an event and a site to see the decision.")));
 }
 
+/** A pairing with no stored decision is not silently evaluated on view. */
+export function renderDecisionPending({ event, site, onEvaluate, busy = false, error = null } = {}) {
+  const host = byId("decision-panel");
+  if (!host) return;
+  clearNode(host);
+
+  const wrap = el("div", "decision-pending");
+  wrap.appendChild(el("span", "pending-kicker", busy ? "Evaluation running" : "Not yet evaluated"));
+  wrap.appendChild(el("h2", "pending-title", txt(event?.title)));
+  wrap.appendChild(
+    el("p", "pending-site", `against ${txt(site?.label || site?.address_raw || site?.id)}`)
+  );
+  wrap.appendChild(
+    el(
+      "p",
+      "pending-copy",
+      busy
+        ? "The stage and geography gates run first. Physical fields are fetched only if those free checks pass."
+        : "Opening this console is read-only. Run this pairing explicitly to create a stored ALERT or SILENCE decision."
+    )
+  );
+
+  if (error) wrap.appendChild(el("p", "pending-error", txt(error)));
+
+  const action = el("button", "evaluate-button", busy ? "Evaluating…" : "Evaluate pairing");
+  action.type = "button";
+  action.disabled = busy || typeof onEvaluate !== "function";
+  action.setAttribute("aria-busy", String(busy));
+  if (!busy && typeof onEvaluate === "function") action.addEventListener("click", onEvaluate);
+  wrap.appendChild(action);
+  wrap.appendChild(
+    el(
+      "p",
+      "pending-note",
+      "This may fetch missing Mireye fields after a quote and can spend credits. Repeat evaluations replay the stored decision."
+    )
+  );
+  host.appendChild(wrap);
+}
+
 /** Government half: the passage, the link, the stage and its date. */
 function renderRecordSection(decision, event) {
   const section = el("section", "dp-section");
@@ -575,6 +619,11 @@ function renderGroundSection(decision, derived, vicinity) {
     row.appendChild(el("span", "comp-name", txt(name)));
 
     const bar = el("div", "comp-bar");
+    bar.setAttribute("role", "progressbar");
+    bar.setAttribute("aria-label", `${name} score`);
+    bar.setAttribute("aria-valuemin", "0");
+    bar.setAttribute("aria-valuemax", "1");
+    bar.setAttribute("aria-valuenow", String(num(comp.score) ?? 0));
     const fill = el("div", "comp-fill");
     fill.style.width = `${clampPct(comp.score).toFixed(1)}%`;
     bar.appendChild(fill);
@@ -686,7 +735,7 @@ function renderCitations(derived, decision) {
         "p",
         "dp-meta",
         decision?.metric
-          ? "Field-level provenance for this score could not be loaded, so the licences behind it are not shown here."
+          ? "The decision response includes component values and basis text above, but not field-level source metadata or licences."
           : "No physical fields were read for this pairing."
       )
     );
@@ -730,9 +779,9 @@ function renderCaveats(host, { decision, event, derived, vicinity, cites }) {
   //    until they are fitted against real sites (context/phase3.md R1).
   const cal = derived?.calibration ?? derived?.profile_calibration ?? null;
   const calText = typeof cal === "string" ? cal : cal && typeof cal === "object" ? cal.status || cal.state || cal.note || "" : "";
-  if (/provisional|placeholder|uncalibrated|unvalidated|untuned|not fitted/i.test(String(calText))) {
+  if (decision?.metric || /provisional|placeholder|uncalibrated|unvalidated|untuned|not fitted/i.test(String(calText))) {
     caveats.push(
-      `Scoring is provisional (${String(calText)}). The component weights and the alert threshold are placeholders, not values fitted against real sites — read the ordering, not the absolute number.`
+      `Scoring is provisional${calText ? ` (${String(calText)})` : ""}. The component weights and the 0.50 alert threshold are placeholders, not values fitted against real sites — read the evidence and ordering, not the absolute number.`
     );
   }
 
@@ -834,11 +883,12 @@ export function renderDecision(decision, context = {}) {
 
 /* ── ledger ───────────────────────────────────────────────────────────────── */
 
-function creditsOf(row) {
-  const charged = num(row?.charged_credits);
-  if (charged !== null) return charged;
-  const quoted = num(row?.quoted_credits);
-  return quoted === null ? 0 : quoted;
+function chargedOf(row) {
+  return num(row?.charged_credits) ?? 0;
+}
+
+function quotedOf(row) {
+  return num(row?.quoted_credits) ?? 0;
 }
 
 function budgetRemaining(budget) {
@@ -864,7 +914,7 @@ export function renderLedger(rows, budget) {
     // a group with five rows in it is the claim failing, on screen, unarguably.
     const groups = new Map();
     for (const row of list) {
-      const key = row.caller_ref || " unattributed";
+      const key = row.caller_ref || "__unattributed";
       if (!groups.has(key)) groups.set(key, []);
       groups.get(key).push(row);
     }
@@ -885,12 +935,13 @@ export function renderLedger(rows, budget) {
 
       for (const [key, groupRows] of groups) {
         const group = el("div", "ledger-group");
-        const unattributed = key === " unattributed";
-        const credits = groupRows.reduce((sum, r) => sum + creditsOf(r), 0);
+        const unattributed = key === "__unattributed";
+        const charged = groupRows.reduce((sum, r) => sum + chargedOf(r), 0);
+        const quoted = groupRows.reduce((sum, r) => sum + quotedOf(r), 0);
         const hd = el(
           "div",
           "ledger-group-hd",
-          `${unattributed ? "no caller ref (not attributed to an event)" : key}${DOT}${groupRows.length} fetch(es)${DOT}${credits} credits`
+          `${unattributed ? "no caller ref (not attributed to an event)" : key}${DOT}${groupRows.length} fetch(es)${DOT}${charged} charged${DOT}${quoted} quoted`
         );
         group.appendChild(hd);
 
@@ -927,11 +978,12 @@ export function renderLedger(rows, budget) {
     }
 
     if (headline) {
-      const events = [...groups.keys()].filter((k) => k !== " unattributed").length;
-      const credits = list.reduce((sum, r) => sum + creditsOf(r), 0);
+      const events = [...groups.keys()].filter((k) => k !== "__unattributed").length;
+      const charged = list.reduce((sum, r) => sum + chargedOf(r), 0);
+      const quoted = list.reduce((sum, r) => sum + quotedOf(r), 0);
       const remaining = budgetRemaining(budget);
       headline.textContent =
-        `${events} events${DOT}${list.length} fetches${DOT}${credits} credits` +
+        `${events} events${DOT}${list.length} fetches${DOT}${charged} charged${DOT}${quoted} quoted` +
         (remaining === null ? "" : `${DOT}${remaining} credits remaining`);
     }
 
@@ -1140,6 +1192,7 @@ export const Panels = {
   renderSites,
   renderDecision,
   renderDecisionEmpty,
+  renderDecisionPending,
   renderLedger,
   renderReplay,
   toast,

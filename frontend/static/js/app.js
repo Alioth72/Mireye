@@ -34,9 +34,10 @@ const state = {
   selectedEventId: null,
   selectedSiteId: null,
   filters: { stage: "", showSilenced: true },
-  vicinityCache: new Map(),
-  derivedCache: new Map(),
 };
+
+let eventLoadRevision = 0;
+let evaluatingKey = null;
 
 const $ = (id) => document.getElementById(id);
 
@@ -64,14 +65,17 @@ function currentSite() {
 
 /* ── rendering passes ────────────────────────────────────────────────────── */
 function paintFeed() {
-  Panels.renderFeed(state.events, {
+  const visibleCount = Panels.renderFeed(state.events, {
     onSelect: selectEvent,
     selectedId: state.selectedEventId,
     filters: state.filters,
     decisions: state.decisions,
   });
-  $("feed-count").textContent = String(state.events.length);
-  $("feed-empty").hidden = state.events.length > 0;
+  $("feed-count").textContent = String(visibleCount);
+  $("feed-empty").hidden = visibleCount > 0;
+  $("feed-empty").textContent = state.events.length
+    ? "No events match the current filters."
+    : "No events yet. Run the ingest to populate the record.";
 }
 
 function paintSites() {
@@ -87,11 +91,16 @@ function paintSites() {
 
 /* ── selection ───────────────────────────────────────────────────────────── */
 async function selectEvent(eventId) {
+  const revision = ++eventLoadRevision;
   state.selectedEventId = eventId;
   paintFeed();
-  await loadDecisions();
+  if (state.selectedSiteId) Panels.renderDecisionEmpty("Loading the stored decision…");
+
+  await loadDecisions({ canonical_id: eventId });
+  if (revision !== eventLoadRevision || state.selectedEventId !== eventId) return;
+
   paintSites();
-  if (state.selectedSiteId) await showDecision();
+  showDecision();
 }
 
 async function selectSite(siteId) {
@@ -100,20 +109,8 @@ async function selectSite(siteId) {
 
   const site = currentSite();
   if (!site) return;
-
-  let vicinity = state.vicinityCache.get(siteId);
-  if (vicinity === undefined) {
-    try {
-      vicinity = await API.vicinity(siteId);
-    } catch (err) {
-      // A site with no ring scan is normal, not an error worth shouting about.
-      vicinity = err instanceof ApiError && err.status === 404 ? null : null;
-    }
-    state.vicinityCache.set(siteId, vicinity);
-  }
-
-  await MonitorMap.focusSite(site, { vicinity, decision: decisionForSite(siteId) });
-  await showDecision();
+  await MonitorMap.focusSite(site, { vicinity: null, decision: decisionForSite(siteId) });
+  showDecision();
 }
 
 function decisionForSite(siteId) {
@@ -126,7 +123,21 @@ function decisionForSite(siteId) {
   );
 }
 
-async function showDecision() {
+function mergeDecisions(rows) {
+  const incoming = Array.isArray(rows) ? rows.filter(Boolean) : [];
+  if (!incoming.length) return;
+  const replaced = new Set(
+    incoming.map((d) => `${d.canonical_id || d.event_id}|${d.stage}|${d.site_id}`)
+  );
+  state.decisions = [
+    ...incoming,
+    ...state.decisions.filter(
+      (d) => !replaced.has(`${d.canonical_id || d.event_id}|${d.stage}|${d.site_id}`)
+    ),
+  ];
+}
+
+function showDecision() {
   const site = currentSite();
   const event = currentEvent();
   if (!site || !event) {
@@ -134,61 +145,84 @@ async function showDecision() {
     return;
   }
 
-  let decision = decisionForSite(site.id);
+  const decision = decisionForSite(site.id);
   if (!decision) {
-    try {
-      decision = await API.decide({ event, site_id: site.id });
-      state.decisions.push(decision);
-    } catch (err) {
-      Panels.renderDecisionEmpty(
-        err instanceof ApiError ? `Could not evaluate: ${err.message}` : "Could not evaluate this pairing."
-      );
-      return;
-    }
-  }
-
-  let derived = null;
-  if (decision.metric) {
-    const key = `${site.id}:${decision.metric}`;
-    derived = state.derivedCache.get(key);
-    if (derived === undefined) {
-      try { derived = await API.derived(site.id, decision.metric); }
-      catch { derived = null; }
-      state.derivedCache.set(key, derived);
-    }
+    Panels.renderDecisionPending({ event, site, onEvaluate: evaluateCurrentPair });
+    return;
   }
 
   Panels.renderDecision(decision, {
     event,
     site,
-    derived,
-    vicinity: state.vicinityCache.get(site.id) || null,
+    derived: null,
+    vicinity: null,
   });
   MonitorMap.setDecision(site.id, decisionKey(decision.decision));
-  paintSites();
+}
+
+async function evaluateCurrentPair() {
+  const site = currentSite();
+  const event = currentEvent();
+  if (!site || !event) return;
+
+  const eventId = state.selectedEventId;
+  const siteId = site.id;
+  const key = `${eventId}|${siteId}`;
+  if (evaluatingKey === key) return;
+
+  evaluatingKey = key;
+  Panels.renderDecisionPending({ event, site, busy: true });
+  try {
+    const decision = await API.decide({ event, site_id: siteId });
+    mergeDecisions([decision]);
+    if (state.selectedEventId === eventId && state.selectedSiteId === siteId) {
+      MonitorMap.setDecision(siteId, decisionKey(decision.decision));
+      paintFeed();
+      paintSites();
+      showDecision();
+    }
+  } catch (err) {
+    if (state.selectedEventId === eventId && state.selectedSiteId === siteId) {
+      Panels.renderDecisionPending({
+        event,
+        site,
+        onEvaluate: evaluateCurrentPair,
+        error: err instanceof ApiError ? `Could not evaluate: ${err.message}` : "Could not evaluate this pairing.",
+      });
+    }
+  } finally {
+    if (evaluatingKey === key) evaluatingKey = null;
+  }
 }
 
 /* ── loaders ─────────────────────────────────────────────────────────────── */
-async function loadDecisions() {
+async function loadDecisions(filters = {}, { replace = false } = {}) {
   try {
-    const res = await API.decisions(
-      state.selectedEventId ? { canonical_id: state.selectedEventId } : {}
-    );
-    state.decisions = Array.isArray(res) ? res : res?.decisions || [];
+    const res = await API.decisions(filters);
+    const rows = Array.isArray(res) ? res : res?.decisions || [];
+    if (replace) state.decisions = rows;
+    else mergeDecisions(rows);
   } catch {
-    state.decisions = [];
+    // A failed read must not erase decisions already visible in the console.
   }
 }
 
 async function loadWatch() {
-  const [events, sites] = await Promise.allSettled([API.events(), API.sites()]);
+  const [events, sites, decisions] = await Promise.allSettled([
+    API.events(),
+    API.sites(),
+    API.decisions(),
+  ]);
   state.events = events.status === "fulfilled" ? (events.value || []) : [];
   state.sites  = sites.status  === "fulfilled" ? (sites.value  || []) : [];
+  state.decisions = decisions.status === "fulfilled"
+    ? (Array.isArray(decisions.value) ? decisions.value : decisions.value?.decisions || [])
+    : [];
 
   if (events.status === "rejected") Panels.toast("Could not load the public record.", "alert");
   if (sites.status === "rejected")  Panels.toast("Could not load monitored sites.", "alert");
+  if (decisions.status === "rejected") Panels.toast("Could not load stored decisions.", "review");
 
-  await loadDecisions();
   paintFeed();
   paintSites();
 }
@@ -216,35 +250,69 @@ const VIEWS = [
   ["tab-ledger", "view-ledger", loadLedger],
 ];
 
-function wireTabs() {
-  for (const [tabId, viewId, loader] of VIEWS) {
-    $(tabId).addEventListener("click", async () => {
-      for (const [t, v] of VIEWS) {
-        const active = t === tabId;
-        $(t).classList.toggle("is-active", active);
-        $(t).setAttribute("aria-selected", String(active));
-        $(v).hidden = !active;
-        $(v).classList.toggle("is-active", active);
-      }
-      if (loader) await loader();
-    });
+async function activateView(index, { focus = false } = {}) {
+  const [, , loader] = VIEWS[index];
+  for (let i = 0; i < VIEWS.length; i += 1) {
+    const [tabId, viewId] = VIEWS[i];
+    const active = i === index;
+    $(tabId).classList.toggle("is-active", active);
+    $(tabId).setAttribute("aria-selected", String(active));
+    $(tabId).tabIndex = active ? 0 : -1;
+    $(viewId).hidden = !active;
+    $(viewId).classList.toggle("is-active", active);
   }
+  if (focus) $(VIEWS[index][0]).focus();
+  if (loader) {
+    const tab = $(VIEWS[index][0]);
+    tab.setAttribute("aria-busy", "true");
+    try { await loader(); }
+    finally { tab.removeAttribute("aria-busy"); }
+  }
+}
+
+function wireTabs() {
+  VIEWS.forEach(([tabId], index) => {
+    const tab = $(tabId);
+    tab.addEventListener("click", () => activateView(index));
+    tab.addEventListener("keydown", (event) => {
+      let next = null;
+      if (event.key === "ArrowRight") next = (index + 1) % VIEWS.length;
+      if (event.key === "ArrowLeft") next = (index - 1 + VIEWS.length) % VIEWS.length;
+      if (event.key === "Home") next = 0;
+      if (event.key === "End") next = VIEWS.length - 1;
+      if (next !== null) {
+        event.preventDefault();
+        activateView(next, { focus: true });
+      }
+    });
+  });
 }
 
 /* ── theme ───────────────────────────────────────────────────────────────── */
 function wireTheme() {
   const root = document.documentElement;
+  const button = $("theme-toggle");
+  const updateControl = () => {
+    const active = root.getAttribute("data-theme") ||
+      (window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+    const target = active === "dark" ? "light" : "dark";
+    button.setAttribute("aria-label", `Switch to ${target} theme`);
+    button.title = `Switch to ${target} theme`;
+  };
+
   let stored = null;
   try { stored = localStorage.getItem("monitor-theme"); } catch { /* private mode */ }
   if (stored === "dark" || stored === "light") root.setAttribute("data-theme", stored);
+  updateControl();
 
-  $("theme-toggle").addEventListener("click", () => {
+  button.addEventListener("click", () => {
     const now = root.getAttribute("data-theme");
     const prefersDark = window.matchMedia?.("(prefers-color-scheme: dark)").matches;
     const next = now ? (now === "dark" ? "light" : "dark") : (prefersDark ? "light" : "dark");
     root.setAttribute("data-theme", next);
     try { localStorage.setItem("monitor-theme", next); } catch { /* ignore */ }
     MonitorMap.setTheme?.(next);
+    updateControl();
   });
 }
 
@@ -275,8 +343,9 @@ async function boot() {
   try {
     const h = await API.health();
     const dot = $("health-dot");
-    dot.dataset.state = h?.ok === false ? "down" : "up";
-    dot.title = h?.ok === false ? "Backend unreachable" : "Backend healthy";
+    const healthy = h?.ok !== false && h?.status !== "error";
+    dot.dataset.state = healthy ? "up" : "down";
+    dot.title = healthy ? "Backend healthy" : "Backend unreachable";
   } catch {
     $("health-dot").dataset.state = "down";
     $("health-dot").title = "Backend unreachable";
@@ -290,8 +359,17 @@ async function boot() {
 
   await loadWatch();
 
-  // Open on the first event so the console is never a blank screen.
+  // Open a complete read-only pairing so the console is useful immediately.
   if (state.events.length) await selectEvent(state.events[0].canonical_id || state.events[0].event_id);
+  if (state.sites.length) await selectSite(state.sites[0].id);
 }
 
-boot();
+boot().catch((err) => {
+  console.error("[app] boot failed", err);
+  const dot = $("health-dot");
+  if (dot) {
+    dot.dataset.state = "down";
+    dot.title = "Console failed to start";
+  }
+  Panels.renderDecisionEmpty("The console could not start. Reload the page or check the browser console.");
+});

@@ -7,12 +7,23 @@ app cannot collide with their environment.
 from __future__ import annotations
 
 from functools import lru_cache
+from pathlib import Path
 
+from dotenv import load_dotenv
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+_BACKEND_DIR = Path(__file__).resolve().parents[1]
+load_dotenv(_BACKEND_DIR.parent / ".env")
+load_dotenv(_BACKEND_DIR / ".env", override=True)
+
+
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore", case_sensitive=False)
+    model_config = SettingsConfigDict(
+        env_file=(str(_BACKEND_DIR.parent / ".env"), str(_BACKEND_DIR / ".env")),
+        extra="ignore",
+        case_sensitive=False,
+    )
 
     # --- Mireye API ---------------------------------------------------------
     mireye_api_token: str = ""

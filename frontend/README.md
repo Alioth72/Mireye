@@ -29,8 +29,9 @@ copy .env.example .env
 ```
 
 Then edit `.env` - at minimum set `GOOGLE_MAPS_BROWSER_KEY` if you want a real
-map. Leaving it empty is supported: the console falls back to an SVG vicinity
-diagram rather than breaking.
+map. Leaving it empty is supported: the console falls back to a local SVG
+coordinate diagram rather than breaking. Sampling rings appear only when the
+backend returns real vicinity data.
 
 Start the server:
 
@@ -82,6 +83,14 @@ as an empty 200.
 | `GET /api/replay/runs` | `GET /v1/replay/runs` |
 
 `vicinity` and `derived/{metric}` do not exist on the backend yet. They are
+
+The Watch screen does not call those missing routes and does not run
+`POST /api/decide` merely because somebody selected a site. It first reads
+stored decisions through `GET /api/decisions`. An unevaluated event/site pairing
+shows an explicit **Evaluate pairing** action with a credit warning; only that
+operator action can start a new decision. Until a real vicinity payload exists,
+the map shows the registered coordinate without inventing the planned
+250/750/1500 m sampling rings.
 wired anyway and return a clean pass-through 404 until they do.
 
 `/api/health` is the one deliberate exception to error pass-through: it always

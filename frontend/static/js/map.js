@@ -349,11 +349,14 @@ function buildPlan(site, vicinity, decision) {
   const head = headlineField(list);
   const rows = sampleRows(vicinity);
 
-  const rings =
-    (Array.isArray(head?.rings) && head.rings.filter((r) => num(r) !== null).map(Number)) ||
-    (Array.isArray(vicinity?.rings) && vicinity.rings.filter((r) => num(r) !== null).map(Number)) ||
-    RING_RADII;
-  const ringRadii = rings.length ? rings.slice().sort((a, b) => a - b) : RING_RADII;
+  const explicitRings = Array.isArray(head?.rings)
+    ? head.rings.filter((r) => num(r) !== null).map(Number)
+    : Array.isArray(vicinity?.rings)
+      ? vicinity.rings.filter((r) => num(r) !== null).map(Number)
+      : [];
+  const hasVicinityData = Boolean(vicinity && (list.length || rows.length));
+  const rings = explicitRings.length ? explicitRings : hasVicinityData ? RING_RADII : [];
+  const ringRadii = rings.slice().sort((a, b) => a - b);
 
   const fraction = num(head?.fraction_usable);
   const plan = {
@@ -473,10 +476,14 @@ function buildPlan(site, vicinity, decision) {
   }
 
   const sub = [];
-  sub.push(
-    `Rings are sampled ground at ${plan.ringRadii.join(" / ")} m from the coordinate — ` +
-      "the outermost ring is the limit of what we measured, not a parcel boundary."
-  );
+  if (plan.ringRadii.length) {
+    sub.push(
+      `Rings are sampled ground at ${plan.ringRadii.join(" / ")} m from the coordinate — ` +
+        "the outermost ring is the limit of what we measured, not a parcel boundary."
+    );
+  } else {
+    sub.push("Only the registered coordinate is shown. No vicinity measurement is available, so no sampling rings or coverage area are drawn.");
+  }
   if (plan.synthesised) {
     sub.push(
       "Dots are the canonical ring positions (centroid + 8 bearings x 3 rings), not measured locations; " +
@@ -635,11 +642,11 @@ function renderFallbackSvg(plan) {
     svg.innerHTML =
       `<rect x="0" y="0" width="${SVG_SIZE}" height="${SVG_SIZE}" style="fill:var(--surface)"/>` +
       `<text x="${SVG_SIZE / 2}" y="${SVG_SIZE / 2}" text-anchor="middle" ` +
-      `style="fill:var(--muted);font-family:var(--font-body);font-size:13px">Select a site to see its vicinity.</text>`;
+      `style="fill:var(--muted);font-family:var(--font-body);font-size:13px">Select a site to inspect its coordinate.</text>`;
     return;
   }
 
-  const maxR = Math.max(...plan.ringRadii, plan.infra?.reach || 0, 1);
+  const maxR = Math.max(...plan.ringRadii, plan.infra?.reach || 0, 750);
   const scale = (SVG_SIZE / 2 - SVG_MARGIN) / maxR; // px per metre
   const cx = SVG_SIZE / 2;
   const cy = SVG_SIZE / 2;
@@ -1031,7 +1038,10 @@ function drawFocusOnMap(plan) {
   // frame the whole sampled area, not just the pin
   try {
     if (outer?.getBounds) S.map.fitBounds(outer.getBounds(), 56);
-    else S.map.setCenter(plan.centre);
+    else {
+      S.map.setCenter(plan.centre);
+      S.map.setZoom(14);
+    }
   } catch {
     S.map.setCenter(plan.centre);
   }
@@ -1052,8 +1062,8 @@ export const MonitorMap = {
 
       if (!S.config.maps_key) {
         showFallback(
-          "No Maps API key is configured, so the vicinity is drawn locally from the " +
-            "scan data. The geometry is the same; only the basemap is missing."
+          "No Maps API key is configured, so a local coordinate diagram is shown. " +
+            "Sampling overlays appear only when real vicinity data is available."
         );
         renderFallbackSvg(null);
         return;
@@ -1086,8 +1096,7 @@ export const MonitorMap = {
     } catch (err) {
       showFallback(
         `The live map is unavailable (${err?.message || "unknown error"}). ` +
-          "The vicinity below is drawn from the scan data itself — rings, sample points, " +
-          "usable-ground overlay and reachable infrastructure are all present."
+          "The local diagram shows the registered coordinate and only the sampling data actually returned by the API."
       );
       try { renderFallbackSvg(S.lastFocus ? buildPlan(S.lastFocus.site, S.lastFocus.vicinity, S.lastFocus.decision) : null); }
       catch { renderFallbackSvg(null); }
@@ -1133,6 +1142,8 @@ export const MonitorMap = {
         caption("Could not read the vicinity payload", "The scan response did not contain field summaries or sample points.");
         return;
       }
+      const vicinityLegend = $("map-vicinity-legend");
+      if (vicinityLegend) vicinityLegend.hidden = plan.ringRadii.length === 0;
 
       caption(plan.captionMain, plan.captionSub);
 
@@ -1155,7 +1166,11 @@ export const MonitorMap = {
   setDecision(siteId, key) {
     try {
       if (!siteId) return;
-      S.decisions.set(siteId, decisionKey(key));
+      const next = decisionKey(key);
+      S.decisions.set(siteId, next);
+      if (S.lastFocus?.site?.id === siteId) {
+        S.lastFocus.decision = next;
+      }
       if (S.mode === "google") drawPins();
       else if (S.lastFocus) renderFallbackSvg(buildPlan(S.lastFocus.site, S.lastFocus.vicinity, S.lastFocus.decision));
     } catch {

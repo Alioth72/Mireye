@@ -53,8 +53,13 @@ at all, or to point Phase 2 at the live Mireye API.
 **Serve the combined API** (Phase 1 mounted at `/phase1`, Phase 2 + Phase 3 as routers),
 from `backend/`:
 ```bash
+.venv/Scripts/python.exe scripts/seed_demo.py
 .venv/Scripts/python.exe -m uvicorn phase3.app:app --reload --port 8000
 ```
+
+`seed_demo.py` writes the offline demo into the persistent databases used by the
+console. `run_pipeline.py` is an isolated in-memory proof and intentionally leaves the
+served databases unchanged.
 
 **Serve the console**, from `frontend/` in a second terminal — it proxies `/api/*` to the
 backend above, so start the backend first:

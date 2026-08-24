@@ -20,9 +20,13 @@ export class ApiError extends Error {
 async function req(path, options = {}) {
   let res;
   try {
+    const headers = { accept: "application/json", ...(options.headers || {}) };
+    if (options.body !== undefined && !Object.keys(headers).some((key) => key.toLowerCase() === "content-type")) {
+      headers["content-type"] = "application/json";
+    }
     res = await fetch(path, {
-      headers: { "content-type": "application/json", ...(options.headers || {}) },
       ...options,
+      headers,
     });
   } catch (cause) {
     throw new ApiError(`Cannot reach the backend (${path}).`, 0, { cause: String(cause) });

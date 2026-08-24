@@ -6,9 +6,15 @@ into phase2.store/phase2.scoring."""
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import Iterator, Optional
 
+from dotenv import load_dotenv
 from sqlmodel import Session, SQLModel, create_engine
+
+_BACKEND_DIR = Path(__file__).resolve().parents[1]
+load_dotenv(_BACKEND_DIR.parent / ".env")
+load_dotenv(_BACKEND_DIR / ".env", override=True)
 
 _DATABASE_URL = os.environ.get("PHASE3_DATABASE_URL", "sqlite:///./phase3.db")
 _engine = None
