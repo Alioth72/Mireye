@@ -193,6 +193,7 @@ async def ingest_matter(
         event_type = extraction.event_type
         title = extraction.title or matter_record.title
         description = extraction.description
+        subject = extraction.subject
         confidence = extraction.confidence
         geography_extracted = extraction.geographic_scope.model_dump() if extraction.geographic_scope else None
         evidence_items = extraction.evidence
@@ -209,6 +210,7 @@ async def ingest_matter(
         event_type = guessed
         title = matter_record.title or external_id
         description = None
+        subject = None  # heuristic path has no way to distinguish e.g. data center vs BESS
         confidence = 0.4  # heuristic-only, deliberately low
         geography_extracted = None
         evidence_items = []
@@ -229,6 +231,7 @@ async def ingest_matter(
         event_type=event_type,
         title=title,
         description=description,
+        subject=subject,
         jurisdiction=jurisdiction,
         stage=stage,
         stage_occurred_at=stage_occurred_at,

@@ -1,9 +1,53 @@
-# The Monitor — Public Record / Event Intelligence
+# The Monitor
 
-Person 1's subsystem: turns Seattle Legistar government records into
-canonical, deduplicated, stage-tracked, provenance-backed Events, exposed as
-clean JSON for the Mireye layer (Phase 2) and the monitor/orchestration/
-frontend layer (Phase 3) to consume.
+An agentic monitoring system: public government records → structured event (Phase 1) →
+Mireye physical features (Phase 2) → materiality decision, `ALERT` or `SILENCE`
+(Phase 3), conservative by design — a false alert is worse than staying silent. See
+`context/phase1.md`, `context/phase2.md`, `context/phase3.md` for each phase's full
+integration contract, decisions, and cross-phase asks.
+
+## Quickstart — the whole pipeline, one command
+
+```bash
+pip install -r requirements.txt
+pytest -q                          # 124 passed, no network/LLM/Mireye key required
+python scripts/run_pipeline.py     # public record -> event -> physical features -> ALERT/SILENCE
+```
+
+`run_pipeline.py` ingests a real bill through Phase 1's actual pipeline (classify →
+deterministic stage resolution → canonicalize, including a real LLM extraction call —
+see below), registers two physically contrasting sites through Phase 2's actual pipeline
+(quote → fetch → store → score), and evaluates the same ADOPTED event against both
+through Phase 3 — producing an `ALERT` for the physically material site and a `SILENCE`
+for the physically irrelevant one, each with full government and physical evidence. See
+`context/phase3.md` for the design behind each gate, and the bottom of this file for
+real example output.
+
+The test suite is fully offline by design (no network/LLM/Mireye key required, ever —
+`context/phase3.md` D7/D8). `run_pipeline.py` always fakes Mireye too, so its cost and
+output stay reproducible regardless of live data (D7) — but it *does* run a real LLM
+extraction call when a working key is configured: this repo currently has both an
+`OPENAI_API_KEY` (primary) and `GEMINI_API_KEY` (automatic fallback) verified working in
+`.env`, so `python scripts/run_pipeline.py` as shown above is already exercising real
+Phase 1 LLM extraction. Real `MIREYE_API_TOKEN` is also configured and verified working
+end to end (D7) but is intentionally not the demo's default path, for the same
+reproducibility reason. See "Setup" below for what's needed to run with no credentials
+at all, or to point Phase 2 at the live Mireye API.
+
+**Serve the combined API** (Phase 1 mounted at `/phase1`, Phase 2 + Phase 3 as routers):
+```bash
+uvicorn phase3.app:app --reload --port 8000
+```
+- `GET  /phase1/events`, `GET /phase1/events/{id}` — Phase 1
+- `POST /v1/sites`, `GET /v1/sites/{id}/{bundle}`, `GET /v1/fetch-log` — Phase 2
+- `POST /v1/decide` — Phase 3 (`{event_id or event, site_id}` → `MaterialityDecision`)
+
+---
+
+## Phase 1 subsystem — Public Record / Event Intelligence
+
+Turns Seattle Legistar government records into canonical, deduplicated, stage-tracked,
+provenance-backed Events, exposed as clean JSON for Phase 2 and Phase 3 to consume.
 
 ```
 Seattle Legistar (real API, no auth)
@@ -14,8 +58,9 @@ relevant?  ── no → skipped, stored, not alerted on
         │ yes
         ↓  stage_resolver.py (deterministic, from MatterHistory/MatterStatus)
         ↓  extract.py (LLM, event_type/title/description/geography;
+        │              OpenAI primary / Gemini fallback, see LLM_PROVIDER;
         │              falls back to classify.guess_event_type() heuristic
-        │              if no ANTHROPIC_API_KEY or the call fails)
+        │              if neither key works or both calls fail)
         ↓  canonicalize.py (dedup by bill number + stage-transition upsert)
 Event (canonical, versioned, with Evidence) + geo.py (geography, defaults
         to UNRESOLVED rather than guessing)
@@ -26,7 +71,8 @@ Clean JSON contract for Phase 2 (Mireye) + Phase 3 (monitor/orchestration)
 
 ## Status: tested end to end
 
-`pytest -q` → **18 passed**, including a full pipeline test
+`pytest -q` → **124 passed** across the merged repo (19 from this subsystem plus
+Phase 2 and Phase 3's suites), including a full pipeline test
 (`tests/test_ingest.py`) that runs the exact scenario from the spec: a
 data-center moratorium bill moving PROPOSED → HEARD → ADOPTED across three
 separate ingestion passes, using a fake in-memory source (no network/LLM
@@ -44,13 +90,25 @@ in the test suite — run the scripts below locally to exercise those.
 
 ```bash
 pip install -r requirements.txt
-pytest -q                                  # 18 passed, no network needed
+pytest -q                                  # 124 passed, no network needed
 python scripts/probe_legistar.py --types   # confirm Legistar type strings (already done)
 ```
 
-For real LLM extraction (optional — heuristic fallback works without it):
+For real LLM extraction (optional — the keyword heuristic works without it). Either key
+alone is enough; with both set, `LLM_PROVIDER` picks which is primary (default `openai`
+— see `context/phase3.md` D8 for why) and the other is used as an automatic fallback if
+the primary's call fails:
 ```bash
-export ANTHROPIC_API_KEY=sk-...    # PowerShell: $env:ANTHROPIC_API_KEY="sk-..."
+export OPENAI_API_KEY=...    # PowerShell: $env:OPENAI_API_KEY="..."
+export GEMINI_API_KEY=...    # PowerShell: $env:GEMINI_API_KEY="..."
+export LLM_PROVIDER=openai   # optional; "openai" | "gemini"
+```
+
+For real Mireye physical data (optional — `scripts/run_pipeline.py` uses a fake
+transport by default even when this is set, for reproducibility; see `context/phase3.md`
+D7 — verified working live otherwise):
+```bash
+export MIREYE_API_TOKEN=...    # PowerShell: $env:MIREYE_API_TOKEN="..."
 ```
 
 ## Running it for real
@@ -124,7 +182,7 @@ should leak into their code.
   `Council Bill (CB)`, `Resolution (Res)`, `Ordinance (Ord)` — confirmed
   against live data.
 - **No-LLM fallback exists on purpose.** `classify.guess_event_type()` is a
-  coarse keyword→EventType heuristic used when `ANTHROPIC_API_KEY` isn't set
+  coarse keyword→EventType heuristic used when `GEMINI_API_KEY` isn't set
   or the call fails, so ingestion never hard-stops on LLM availability. It
   produces lower-confidence events (0.4) and should be treated as a
   placeholder for the real extraction once wired.
@@ -147,3 +205,81 @@ should leak into their code.
   a hash of title+date-bucket, unreviewed.
 - No auth/rate-limiting on `api.py` (fine for a hackathon demo, not for
   anything public).
+
+---
+
+## Phase 3 — example output
+
+`python scripts/run_pipeline.py` ingests one real bill (CB121214, a data-center
+moratorium) through Phase 1's actual PROPOSED → HEARD → ADOPTED lifecycle, registers two
+physically contrasting sites through Phase 2's actual quote → fetch → store → score
+pipeline, and evaluates the **same ADOPTED event** against both. Government evidence
+below is real Gemini extraction output (`GEMINI_API_KEY` in `.env`), not simulated.
+Full design behind each gate: `context/phase3.md`.
+
+**ALERT case** — SODO industrial site (strong grid, fiber, flat, clear of every
+constraint flag) — the moratorium removes real option value here:
+
+```json
+{
+  "decision": "ALERT",
+  "canonical_id": "seattle:demo-legistar:cb-121214",
+  "stage": "ADOPTED",
+  "reasons": [
+    "data_center_optionality=1.00 >= 0.5: site is physically material to this event (adopted moratorium)"
+  ],
+  "government_evidence": [
+    {
+      "source_url": "https://seattle.legistar.com/LegislationDetail.aspx?ID=CB121214",
+      "passage": "An ordinance imposing a temporary moratorium on new data center development citywide.",
+      "reason": "This passage describes a legislative action that restricts development, making it a material event."
+    },
+    {
+      "passage": "On June 9, 2026, the ordinance was passed by a vote of 9-0 and signed into law.",
+      "reason": "This explicitly states that the ordinance was passed and signed into law, indicating the 'ADOPTED' stage."
+    }
+  ],
+  "metric": "data_center_optionality",
+  "score": 1.0,
+  "physical_components": {
+    "power":   {"score": 1.0, "weight": 0.4,  "basis": "230 kV at nearest line, substation 3400 m away (extra-high voltage (>=230 kV))"},
+    "fiber":   {"score": 1.0, "weight": 0.2,  "basis": "fiber_broadband_available = true"},
+    "terrain": {"score": 1.0, "weight": 0.15, "basis": "slope 2.1 deg (flat)"},
+    "clear":   {"score": 1.0, "weight": 1.0,  "basis": "no constraint flags on record"}
+  },
+  "replayed": false
+}
+```
+(6 evidence citations in the real output; trimmed to 2 here for brevity.)
+
+**SILENCE case** — the identical ADOPTED, high-confidence, correctly-scoped event
+against a Duwamish-floodplain-shaped site — the moratorium removes nothing, because the
+site was never buildable for a data center in the first place:
+
+```json
+{
+  "decision": "SILENCE",
+  "canonical_id": "seattle:demo-legistar:cb-121214",
+  "stage": "ADOPTED",
+  "reasons": [
+    "data_center_optionality=0.01 < 0.5: site's physical profile means this event does not materially change its options (weakest factor: fiber - fiber_broadband_available = false)"
+  ],
+  "government_evidence": [ "...same citation as above..." ],
+  "metric": "data_center_optionality",
+  "score": 0.009,
+  "physical_components": {
+    "power":   {"score": 0.06, "weight": 0.4,  "basis": "12 kV at nearest line, substation 32000 m away (distribution-only voltage (<69 kV))"},
+    "fiber":   {"score": 0.05, "weight": 0.2,  "basis": "fiber_broadband_available = false"},
+    "terrain": {"score": 1.0,  "weight": 0.15, "basis": "slope 1.0 deg (flat)"},
+    "clear":   {"score": 0.05, "weight": 1.0,  "basis": "within_floodplain_polygon: true (flagged)"}
+  },
+  "replayed": false
+}
+```
+
+The demo also runs a third case first: the **same bill, as real (no-LLM) ingestion
+actually produced it** — confidence 0.4, the heuristic fallback's fixed value for a
+keyword-only match — against the physically-strongest site. Result: `SILENCE`,
+`"confidence 0.40 is below the 0.6 threshold"`. Same ADOPTED bill, same ideal site —
+still no alert, because the extraction confidence never crossed the bar. That's the
+conservative-by-design requirement working exactly as intended.

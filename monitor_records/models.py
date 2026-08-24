@@ -120,6 +120,9 @@ class Event(Base):
     event_type: Mapped[EventType] = mapped_column(Enum(EventType))
     title: Mapped[str] = mapped_column(Text)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # e.g. "data centers" vs "BESS" -- both are MORATORIUM events but call for different
+    # Phase 2 bundles (fiber is decisive for the first, noise for the second). D9.
+    subject: Mapped[str | None] = mapped_column(Text, nullable=True)
     jurisdiction: Mapped[str] = mapped_column(String(128), default="Seattle")
     stage: Mapped[EventStage] = mapped_column(Enum(EventStage))
 

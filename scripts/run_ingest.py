@@ -5,15 +5,21 @@ Usage:
     python scripts/run_ingest.py                       # discover+ingest everything since --days ago
     python scripts/run_ingest.py --days 30
     python scripts/run_ingest.py --matter-id 121279 --no-llm
-    python scripts/run_ingest.py --matter-id 121279     # requires ANTHROPIC_API_KEY
+    python scripts/run_ingest.py --matter-id 121279     # requires GEMINI_API_KEY
 
-Without ANTHROPIC_API_KEY set, extraction falls back to the keyword-based
+Without GEMINI_API_KEY set, extraction falls back to the keyword-based
 event_type heuristic (classify.guess_event_type) -- stage resolution is
 unaffected either way, since it's deterministic (stage_resolver.py) and
 never depends on the LLM.
 """
 
 from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # repo root, so `monitor_records`/`phase2`/`phase3` import regardless of cwd
+
 from dotenv import load_dotenv
 load_dotenv()
 import argparse

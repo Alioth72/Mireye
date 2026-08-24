@@ -71,6 +71,7 @@ def upsert_event(
     stage_occurred_at: datetime | None,
     confidence: float,
     document_id: str | None,
+    subject: str | None = None,
     geography_type=None,
     geography: dict | None = None,
 ) -> tuple[Event, bool, bool]:
@@ -97,6 +98,7 @@ def upsert_event(
             event_type=event_type,
             title=title,
             description=description,
+            subject=subject,
             jurisdiction=jurisdiction,
             stage=stage,
             confidence=confidence,
@@ -129,6 +131,7 @@ def upsert_event(
     if confidence >= existing.confidence:
         existing.title = title
         existing.description = description or existing.description
+        existing.subject = subject or existing.subject
         existing.confidence = confidence
 
     if geography_type is not None and existing.geography_type.name == "UNRESOLVED":

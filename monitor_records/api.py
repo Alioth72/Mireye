@@ -25,6 +25,7 @@ def _event_to_json(event: Event) -> dict:
         "stage": event.stage.value,
         "title": event.title,
         "description": event.description,
+        "subject": event.subject,
         "jurisdiction": event.jurisdiction,
         "geography": {
             "type": event.geography_type.value,

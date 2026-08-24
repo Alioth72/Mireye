@@ -141,3 +141,43 @@ def test_stage_change_flag_only_true_on_forward_progress(session):
     )
     assert created2 is False
     assert changed2 is False
+
+
+def test_subject_propagates_through_create_and_update(session):
+    """D9: subject (e.g. "data centers" vs "BESS") must survive upsert_event, since
+    Phase 3's bundle selection branches on it -- a data-center moratorium and a BESS
+    moratorium are both event_type MORATORIUM but need different physical bundles."""
+    cid = canonical_event_id("Seattle", "seattle_legistar", "CB121214")
+
+    event, created, _ = upsert_event(
+        session,
+        canonical_id=cid,
+        event_type=EventType.MORATORIUM,
+        title="An ordinance on data centers",
+        description=None,
+        subject="data centers",
+        jurisdiction="Seattle",
+        stage=EventStage.PROPOSED,
+        stage_occurred_at=datetime(2026, 6, 1),
+        confidence=0.9,
+        document_id="d1",
+    )
+    assert created is True
+    assert event.subject == "data centers"
+
+    # a later update that clears the title/description path (confidence high enough to
+    # win the update) but supplies no subject must not clobber the previously-known one
+    event, _, _ = upsert_event(
+        session,
+        canonical_id=cid,
+        event_type=EventType.MORATORIUM,
+        title="An ordinance on data centers",
+        description=None,
+        subject=None,
+        jurisdiction="Seattle",
+        stage=EventStage.HEARD,
+        stage_occurred_at=datetime(2026, 6, 3),
+        confidence=0.9,  # >= existing.confidence, so the title/description/subject branch runs
+        document_id="d2",
+    )
+    assert event.subject == "data centers"

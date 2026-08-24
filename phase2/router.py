@@ -11,7 +11,7 @@ from typing import Any, AsyncIterator, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
-from sqlmodel import Session
+from sqlmodel import Session, select
 
 from . import catalog
 from .bundles import (
@@ -27,6 +27,9 @@ from .config import get_settings
 from .db import get_session
 from .mireye.client import MireyeClient
 from .mireye.schemas import MireyeError
+from .models import FetchLog, Site, utcnow
+from .orchestrator import fetch_and_store
+from .store import read_fields, serialize
 
 router = APIRouter(prefix="/v1", tags=["phase2"])
 
@@ -169,3 +172,173 @@ async def budget(client: MireyeClient = Depends(get_client)) -> dict[str, Any]:
         return await client.usage()
     except MireyeError as exc:
         raise _http_error(exc) from exc
+
+
+# --------------------------------------------------------------------------
+# sites
+# --------------------------------------------------------------------------
+class SiteCreate(BaseModel):
+    label: Optional[str] = None
+    address: Optional[str] = None
+    lat: Optional[float] = None
+    lng: Optional[float] = None
+
+
+def _site_json(site: Site) -> dict[str, Any]:
+    return {
+        "id": site.id,
+        "label": site.label,
+        "address_raw": site.address_raw,
+        "lat": site.lat,
+        "lng": site.lng,
+        "geocode_accuracy": site.geocode_accuracy,
+        "accuracy_type": site.accuracy_type,
+        "match_type": site.match_type,
+        "normalized_address": site.normalized_address,
+        "geocode_provider": site.geocode_provider,
+        "parcel_grade": site.parcel_grade,
+        "degraded": site.degraded,
+        "precision_note": site.precision_note,
+        "political_region": site.political_region,
+        "political_county": site.political_county,
+        "political_locality": site.political_locality,
+        "tract_geoid": site.tract_geoid,
+        "created_at": site.created_at,
+    }
+
+
+async def _apply_boundaries(session: Session, client: MireyeClient, site: Site) -> None:
+    """Pull the `boundaries` bundle once at registration -- Census TIGER, ~1yr TTL, no
+    shapefiles needed. Best-effort: a boundaries fetch failure must not block site
+    creation, it just leaves scope-resolution fields empty for Phase 3 to see as unknown.
+    """
+    try:
+        await fetch_and_store(session, client, site, bundle_fields("boundaries"), trigger="registration")
+    except MireyeError:
+        return
+    read = read_fields(session, site.id, bundle_fields("boundaries"))
+    by_name = {dp.field_name: dp.value for dp in read.answers}
+    site.political_region = by_name.get("political_region")
+    site.political_county = by_name.get("political_county")
+    site.political_locality = by_name.get("political_locality")
+    site.tract_geoid = by_name.get("tract_geoid")
+    session.add(site)
+    session.commit()
+    session.refresh(site)
+
+
+@router.post("/sites", tags=["sites"])
+async def create_site(
+    body: SiteCreate,
+    session: Session = Depends(get_session),
+    client: MireyeClient = Depends(get_client),
+) -> dict[str, Any]:
+    """Register a monitored site. Geocodes once, ever, when given an address; accepts a
+    direct lat/lng otherwise (Build Brief II permits monitoring "a county, a town, or a
+    single address" -- direct coordinates are a first-class path, not just a fallback).
+    """
+    if body.address and (body.lat is not None or body.lng is not None):
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "invalid_locator", "message": "send address or lat+lng, never both"},
+        )
+
+    if body.address:
+        try:
+            geo = await client.geocode(body.address)
+        except MireyeError as exc:
+            raise _http_error(exc) from exc
+        site = Site(
+            label=body.label,
+            address_raw=body.address,
+            lat=geo.lat,
+            lng=geo.lng,
+            geocode_accuracy=str(geo.accuracy) if geo.accuracy is not None else None,
+            accuracy_type=geo.accuracy_type,
+            match_type=geo.match_type,
+            normalized_address=geo.normalized_address,
+            geocode_provider=geo.provider,
+            parcel_grade=geo.parcel_grade,
+            precision_note=geo.precision_note,
+            geocoded_at=utcnow(),
+        )
+    else:
+        if body.lat is None or body.lng is None:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "invalid_locator", "message": "need address or lat+lng"},
+            )
+        site = Site(label=body.label, lat=body.lat, lng=body.lng)
+
+    session.add(site)
+    session.commit()
+    session.refresh(site)
+
+    await _apply_boundaries(session, client, site)
+
+    return _site_json(site)
+
+
+@router.get("/sites/{site_id}", tags=["sites"])
+def get_site(site_id: str, session: Session = Depends(get_session)) -> dict[str, Any]:
+    site = session.get(Site, site_id)
+    if site is None:
+        raise HTTPException(status_code=404, detail={"error": "site_not_found", "message": site_id})
+    return _site_json(site)
+
+
+@router.get("/sites/{site_id}/{bundle_name}", tags=["sites"])
+async def get_bundle(
+    site_id: str,
+    bundle_name: str,
+    session: Session = Depends(get_session),
+    client: MireyeClient = Depends(get_client),
+) -> dict[str, Any]:
+    """The primary read path: cached fields are served as-is, anything missing/stale is
+    fetched in one call, quoted first, logged after -- Phase 3 never has to make a
+    second call, and the cost of every read stays visible here and in /v1/fetch-log.
+    """
+    site = session.get(Site, site_id)
+    if site is None:
+        raise HTTPException(status_code=404, detail={"error": "site_not_found", "message": site_id})
+    try:
+        field_names = bundle_fields(bundle_name)
+    except UnknownBundle as exc:
+        raise HTTPException(status_code=400, detail={"error": "unknown_bundle", "message": str(exc)})
+
+    settings = get_settings()
+    read = read_fields(session, site_id, field_names)
+    hits = len(read.answers) + len(read.withheld)
+    to_fetch = read.to_fetch
+    credits_spent = 0
+    if to_fetch and settings.phase2_autofetch_on_miss:
+        try:
+            await fetch_and_store(session, client, site, to_fetch, trigger="cache_miss", caller_ref=None)
+        except MireyeError as exc:
+            raise _http_error(exc) from exc
+        credits_spent = estimate_credits(to_fetch)
+        read = read_fields(session, site_id, field_names)  # re-read post-fetch
+
+    rows = read.answers + read.withheld
+    return {
+        "bundle": bundle_name,
+        "site_id": site_id,
+        "cache": {"hits": hits, "fetched": len(to_fetch) if credits_spent else 0, "credits_spent": credits_spent},
+        "datapoints": [serialize(dp) for dp in rows],
+    }
+
+
+# --------------------------------------------------------------------------
+# fetch log -- the demo evidence that N events cost N fetches, not N x documents
+# --------------------------------------------------------------------------
+@router.get("/fetch-log", tags=["ops"])
+def fetch_log(
+    site_id: Optional[str] = None,
+    limit: int = Query(100, le=1000),
+    session: Session = Depends(get_session),
+) -> list[dict[str, Any]]:
+    query = select(FetchLog).order_by(FetchLog.created_at.desc()).limit(limit)
+    if site_id:
+        query = query.where(FetchLog.site_id == site_id)
+    rows = session.exec(query).all()
+    return [row.model_dump(mode="json") for row in rows]
