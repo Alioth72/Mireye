@@ -1,187 +1,134 @@
-# Bug report — `protected_area_*` returns Papahanaumokuakea for all coordinates in a latitude band
+# Bug report — `protected_area_*` matches a Pacific monument across a US latitude band
 
-**Reported by:** Mireye Earth API user (Build plan)
-**Date observed:** 2026-08-24
-**Catalog version:** 0.16.0 (`/v1/meta/fields` reports 327 fields)
-**Severity:** high — silently corrupts a documented field across a large part of the continental US
+**Date observed:** 2026-08-24 · **Catalog:** 0.16.0 · **Plan:** Build
+**Severity:** high — silently corrupts a documented field across the US Gulf coast
 
 ---
 
 ## Summary
 
-Every coordinate whose latitude falls between roughly **25.3°N and 31.6°N** returns
+Every coordinate between roughly **25.3°N and 31.6°N**, at **any longitude the API
+accepts**, returns:
 
 ```
-intersects_protected_area  = True
+intersects_protected_area  = true
 protected_area_name        = Papahanaumokuakea Marine National Monument
 protected_area_gap_status  = 2
 protected_area_manager     = FWS
-protected_area_designation = NM
 ```
 
-**regardless of longitude.** Papahanaumokuakea is a marine national monument in the Pacific
-Ocean northwest of Hawai'i (roughly 22.75–29.5°N, **161–180°W**). It is being reported for
-inland coordinates in Texas, Florida, and northern Mexico.
+Papahanaumokuakea is a **marine** monument in the Pacific northwest of Hawai'i
+(~22.75–29.5°N, **161–180°W**). It is being reported as the *intersecting* protected area
+for inland cities in Texas, Louisiana, Alabama and Florida.
 
-Outside that latitude band the field behaves correctly.
-
-**Scope of the defect is narrow and worth stating precisely.** Location resolution is not
-affected, and no other field is affected. In the same response for San Antonio City Hall,
-every other value is correct for Texas — `iso_rto: ERCOT`, `egrid_subregion: ERCT`,
-`elevation: 196.6 m`, `coast_distance_m: 168,939`, `design_wet_bulb: 25.2 °C`,
-`days_above_32c: 121`, `nearest_transmission_line_voltage_kv: 138`. Only the
-`protected_area_*` group is wrong. A single point-in-polygon match is returning the wrong
-row; nothing is being mis-located.
+**Only the `protected_area_*` group is wrong.** Location resolution is correct and no
+other field is affected — see "Not caller-side" below.
 
 ---
 
-## Reproduction — using addresses only, no caller-supplied coordinates
+## Evidence: 12 cities, with distance to the monument
 
-This form is given deliberately: the API performs its own geocoding, so no coordinate of
-ours enters the request. The API also confirms the resolved locality in the same response.
+| City | lat | Result | GAP | mi to centre | mi to nearest edge |
+|---|---|---|---|---|---|
+| Miami FL | 25.78 | **Papahanaumokuakea** | 2 | 5,553 | 5,056 |
+| Corpus Christi TX | 27.80 | **Papahanaumokuakea** | 2 | 4,512 | 3,994 |
+| Tampa FL | 27.95 | **Papahanaumokuakea** | 2 | 5,366 | 4,878 |
+| San Antonio TX | 29.42 | **Papahanaumokuakea** | 2 | 4,416 | 3,908 |
+| Houston TX | 29.76 | **Papahanaumokuakea** | 2 | 4,589 | 4,089 |
+| New Orleans LA | 29.95 | **Papahanaumokuakea** | 2 | 4,886 | 4,398 |
+| Jacksonville FL | 30.33 | **Papahanaumokuakea** | 2 | 5,347 | 4,878 |
+| Baton Rouge LA | 30.45 | **Papahanaumokuakea** | 2 | 4,812 | 4,325 |
+| Mobile AL | 30.70 | **Papahanaumokuakea** | 2 | 4,983 | 4,504 |
+| El Paso TX | 31.76 | correct (`false` / `null`) | — | 3,916 | 3,417 |
+| Savannah GA | 32.08 | correct (`false` / `null`) | — | 5,331 | 4,877 |
+| Tucson AZ | 32.22 | correct (`false` / `null`) | — | 3,651 | 3,153 |
+
+**Distance does not predict the result; latitude predicts it perfectly.**
+
+* **Tucson (3,651 mi) and El Paso (3,916 mi) are the two closest cities to the monument,
+  and both are clean.** Miami, the furthest at 5,553 mi, is flagged. Nearest-neighbour
+  behaviour would produce the opposite.
+* **Savannah (5,331 mi, clean) vs Jacksonville (5,347 mi, flagged)** — 16 miles apart in
+  distance from the monument, opposite results. Savannah is also *east* of Jacksonville.
+  The only meaningful difference is 1.7° of latitude.
+
+Every affected city is 3,900–5,100 miles from the monument's **nearest** edge.
+
+---
+
+## Reproduction — addresses only, no caller-supplied coordinates
 
 ```
 POST /v1/geocode  {"address": "100 Military Plaza, San Antonio, TX 78205"}
-  -> lat 29.4246, lng -98.4951
+  -> 29.4246, -98.4951
 
 POST /v1/fetch    {"lat": 29.4246, "lng": -98.4951,
-                   "fields": ["protected_area_name", "intersects_protected_area",
-                              "political_locality", "political_region"]}
-  -> political_locality      "San Antonio"
-     political_region        "Texas"
+                   "fields": ["intersects_protected_area", "protected_area_name",
+                              "political_region"]}
+  -> political_region           "Texas"
      intersects_protected_area  true
-     protected_area_name     "Papahanaumokuakea Marine National Monument"
+     protected_area_name        "Papahanaumokuakea Marine National Monument"
 ```
 
-Same result for `400 Biscayne Blvd, Miami, FL 33132` (geocodes to 25.7784, -80.1889;
-returns `political_locality: "Miami"`, and the same monument).
-
-**Control, outside the band:** `233 S Wacker Dr, Chicago, IL 60606` (41.8787, -87.6359)
-returns `protected_area_name: null`, `intersects_protected_area: false`. Correct.
+Same for `400 Biscayne Blvd, Miami, FL 33132`.
+**Control:** `233 S Wacker Dr, Chicago, IL 60606` (41.88°N) returns `false` / `null`.
 
 ---
 
-## Band boundary
+## Band boundary and longitude independence
 
-Latitude sweep at fixed longitude `-98.4936`, 0.625° steps:
+Latitude sweep at fixed lng `-98.4936`: clean at 25.000, affected from **25.625 through
+31.250**, clean again at 31.875. Combined with El Paso (31.76, clean), the north edge sits
+between **31.25°N and 31.76°N**.
 
-| lat | `intersects_protected_area` | `protected_area_name` |
-|---|---|---|
-| 25.000 | false | — |
-| **25.625** | **true** | **Papahanaumokuakea** |
-| 26.250 – 30.625 | true | Papahanaumokuakea (every step) |
-| **31.250** | **true** | **Papahanaumokuakea** |
-| 31.875 | false | — |
-| 32.500 – 35.000 | false | — |
+Longitude sweep at fixed lat 28.5°N: `-120, -115, -110, -105, -100, -95, -90, -85, -81`
+— **9 of 9 return the monument**, spanning Pacific Ocean, Sonora, Chihuahua, Texas, Gulf of
+Mexico and Florida.
 
-Band edges therefore lie between 25.000–25.625°N and 31.250–31.875°N.
+Random sampling: **0 of 5** protected-area hits in a 31–47°N sample were Papahanaumokuakea
+(correct hits: Gold Butte NM, Gunnison NF, Lander Field Office, Humboldt River Field
+Office). **25 of 25** in a 25.5–30.5°N sample were, including points in Durango, Chihuahua
+and Nuevo León, Mexico, and open water.
 
----
-
-## Longitude has no effect
-
-Fixed latitude **28.5°N**, longitude swept across the continental US:
-
-| lng | `political_region` | `protected_area_name` |
-|---|---|---|
-| -120.0 | (ocean) | Papahanaumokuakea |
-| -115.0 | (ocean) | Papahanaumokuakea |
-| -110.0 | Sonora, MX | Papahanaumokuakea |
-| -105.0 | Chihuahua, MX | Papahanaumokuakea |
-| -100.0 | Texas | Papahanaumokuakea |
-| -95.0 | (Gulf) | Papahanaumokuakea |
-| -90.0 | (Gulf) | Papahanaumokuakea |
-| -85.0 | (Gulf) | Papahanaumokuakea |
-| -81.0 | Florida | Papahanaumokuakea |
-
-9 of 9. The match is a function of latitude alone.
-
-**Affected real cities** (same two fields, one batch):
-
-| City | lat | result |
-|---|---|---|
-| Corpus Christi TX | 27.80 | Papahanaumokuakea, GAP 2 |
-| Tampa FL | 27.95 | Papahanaumokuakea, GAP 2 |
-| Houston TX | 29.76 | Papahanaumokuakea, GAP 2 |
-| New Orleans LA | 29.95 | Papahanaumokuakea, GAP 2 |
-| Jacksonville FL | 30.33 | Papahanaumokuakea, GAP 2 |
-| Baton Rouge LA | 30.45 | Papahanaumokuakea, GAP 2 |
-| Mobile AL | 30.70 | Papahanaumokuakea, GAP 2 |
-| El Paso TX | 31.76 | correct (`false` / `null`) |
-| Savannah GA | 32.08 | correct (`false` / `null`) |
-| Tucson AZ | 32.22 | correct (`false` / `null`) |
-
-Savannah is instructive: it lies **east** of Jacksonville but 1.7° further north, and is
-unaffected. The north edge therefore sits between 31.25°N (affected) and 31.76°N (clean).
-
-**Extent outside US longitudes is untestable.** `/v1/fetch` rejects anything beyond
-`lng -180 to -65` with `400 coord_out_of_bounds` ("V1 supports US coordinates only"), so a
-same-latitude control such as Cairo (30.04°N, 31.24°E) cannot be run. The claim here is
-therefore bounded: within every longitude the API accepts, the match depends on latitude
-alone. Whether the underlying polygon is unbounded further afield cannot be determined
-from the API surface.
+*Extent beyond US longitudes is untestable* — `/v1/fetch` rejects `lng` outside −180 to −65
+with `400 coord_out_of_bounds`, so a same-latitude control such as Cairo cannot be run.
 
 ---
 
-## Incidence
+## Not caller-side
 
-| Sample | Points | Intersecting a protected area | Of those, Papahanaumokuakea |
-|---|---|---|---|
-| Random, lat 31.0–47.5°N, lng -121 to -76 | 25 | 5 | **0** |
-| Random, lat 25.5–30.5°N, lng -106 to -80 | 25 | 25 | **25** |
-
-The 5 correct hits in the northern sample were Gold Butte National Monument (NV),
-Humboldt River Field Office (NV), Proposed Open Space (AZ), Gunnison National Forest (CO),
-and Lander Field Office (WY) — all plausible for their coordinates.
-
-In the southern sample, points located in **Durango, Chihuahua and Nuevo León, Mexico**,
-and points in open water, also returned the monument.
+1. `resolved_location` echoes the submitted coordinate with `source: "coordinate"`.
+2. The **same response** reports the location correctly: for San Antonio City Hall,
+   `political_region: Texas`, `political_county: Bexar County`, `iso_rto: ERCOT`,
+   `egrid_subregion: ERCT`, `elevation: 196.6 m`, `coast_distance_m: 168,939`. Hawai'i is
+   in no ISO/RTO, and a marine monument is not 197 m above sea level 105 miles inland.
+3. The reproduction above supplies **no coordinates at all** — the API geocodes.
+4. The field is documented as *"Name of the **intersecting** PAD-US protected area"* — not
+   nearest. And the distance table shows it is not behaving as nearest either.
 
 ---
 
-## Why this is not a caller-side error
+## Hypothesis
 
-1. `resolved_location` echoes the submitted coordinate exactly, with `source: "coordinate"`.
-   No geocoding drift.
-2. The same response places the point correctly via `political_region` / `political_county`
-   (`Texas` / `Bexar County`). The service knows where the point is.
-3. The address-based reproduction above supplies no coordinates at all.
-4. The field is documented as *"Name of the **intersecting** PAD-US protected area (most
-   protective unit)"* — so this is not nearest-neighbour behaviour. Hawai'i would not be
-   the nearest match to Texas in any case.
-5. Fresh requests, no caching involved; reproduces across separate requests, coordinates
-   and input forms.
+Consistent with the Papahanaumokuakea polygon having lost or wrapped its **longitude**
+bound, leaving a latitude-only stripe. Its real latitude extent (~22.75–29.5°N) sits close
+to the observed band (~25.3–31.6°N).
 
----
-
-## Hypothesis (offered tentatively — we cannot distinguish these from outside)
-
-The observed behaviour is consistent with the Papahanaumokuakea polygon having lost or
-wrapped its **longitude** bound, leaving a latitude-only band across the whole testable
-longitude range. Its real latitude extent (~22.75–29.5°N) sits close to the observed band
-(~25.3–31.6°N).
-
-Whether the defect originates in the PAD-US join or in the USGS PAD-US 4.1 source data is
-not something we can determine from the API surface.
+Whether this originates in the PAD-US join or in USGS PAD-US 4.1 source data cannot be
+determined from the API surface.
 
 ---
 
 ## Impact
 
-`intersects_protected_area` and `protected_area_gap_status` are commonly used as
-development-constraint signals. A GAP-2 designation reads as real conservation protection,
-so any consumer weighting it will heavily penalise every site in the band.
+`intersects_protected_area` and `protected_area_gap_status` are standard
+development-constraint signals, and GAP 2 reads as real conservation protection. The band
+covers Florida, most of Texas, Louisiana, Mississippi, Alabama, southern Georgia and
+southern Arizona/New Mexico — including the Dallas, Atlanta, Phoenix, Houston and San
+Antonio metros.
 
-The band covers all of Florida, most of Texas, Louisiana, Mississippi, Alabama, southern
-Georgia, and southern Arizona and New Mexico — including the Dallas, Atlanta, Phoenix and
-San Antonio metros, several of which are significant data-centre markets.
+**The failure is silent:** `status: ok`, normal `confidence`, nothing anomalous in the
+response. A consumer has no signal to distrust the value.
 
-The failure is silent: `status` is `ok`, `confidence` is normal, and nothing in the
-response indicates a problem. A consumer has no signal to distrust the value.
-
----
-
-## Suggested check
-
-Query `protected_area_name` at any inland coordinate between 26°N and 31°N. If it returns
-Papahanaumokuakea, the polygon's longitude bound is the place to look.
+**Suggested check:** query `protected_area_name` at any inland coordinate between 26°N and
+31°N. If it returns Papahanaumokuakea, the polygon's longitude bound is where to look.
