@@ -1,7 +1,16 @@
+# virtual environments — backend/ and frontend/ each carry their own
 .venv/
+backend/.venv/
+frontend/.venv/
+
 __pycache__/
 *.py[cod]
 .pytest_cache/
+
+# local state and secrets
 *.db
 .env
+backend/.env
+frontend/.env
+
 .DS_Store

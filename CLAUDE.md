@@ -12,26 +12,51 @@ Consequence → Reversal cost, and is usually worth reading before changing that
 
 ## Layout
 
-- `monitor_records/` — Phase 1 (government records → events)
-- `phase2/` — Phase 2 (coordinate → physical datapoints, Mireye)
-- `phase3/` — Phase 3 (event + datapoints → decision)
-- `tests/fakes/mireye_fake.py` — fake Mireye backend used by tests and the demo by default
-- `scripts/run_pipeline.py` — the end-to-end demo
+Backend and frontend are separate trees with **separate virtual environments**. They
+never share a venv: the backend carries the Mireye/LLM stack, the frontend only needs a
+web server and an HTTP client, and keeping them apart means the console cannot
+accidentally import a phase module and bypass the API boundary.
+
+```
+backend/                 the three phases — cwd for every backend command
+  monitor_records/       Phase 1 (government records → events)
+  phase2/                Phase 2 (coordinate → physical datapoints, Mireye)
+  phase3/                Phase 3 (event + datapoints → decision) + the combined app
+  scripts/run_pipeline.py    end-to-end demo
+  tests/fakes/mireye_fake.py fake Mireye backend used by tests and the demo
+  .venv/  requirements.txt  .env
+
+frontend/                the operator console — cwd for every frontend command
+  app.py                 web server; proxies /api/* to the backend
+  static/                index.html, css/, js/ (no build step, plain ES modules)
+  .venv/  requirements.txt  .env
+```
 
 ## Run
 
+Two processes, two terminals. Backend first.
+
 ```bash
-pip install -r requirements.txt
-pytest -q                          # 124 tests, fully offline
-python scripts/run_pipeline.py     # end-to-end ALERT/SILENCE demo
-uvicorn phase3.app:app --reload --port 8000   # combined API
+# backend — from backend/
+.venv/Scripts/python.exe -m pytest tests -q                          # offline
+.venv/Scripts/python.exe scripts/run_pipeline.py                     # ALERT/SILENCE demo
+.venv/Scripts/python.exe -m uvicorn phase3.app:app --reload --port 8000
+
+# frontend — from frontend/
+.venv/Scripts/python.exe -m pytest tests -q
+.venv/Scripts/python.exe -m uvicorn app:app --reload --port 8080     # console at :8080
 ```
 
 ## Before touching this repo
 
-- Real credentials (Mireye, OpenAI, Gemini) live in `.env` (gitignored) — never commit
-  it, never echo the raw values back in output.
-- `pytest -q` must stay fully offline — no test should require network or a real key.
+- Real credentials live in `backend/.env` and `frontend/.env` (both gitignored) — never
+  commit either, never echo the raw values back in output. The frontend's Google Maps
+  browser key is public by nature and must be restricted by HTTP referrer; it is served
+  to the page via `GET /api/config`, never baked into a committed file.
+- Run backend commands with cwd `backend/` and frontend commands with cwd `frontend/`.
+  The backend resolves `sqlite:///./phase2.db` relative to its cwd.
+- `pytest -q` must stay fully offline in both trees — no test should require network or
+  a real key.
   `scripts/run_pipeline.py` fakes Mireye on purpose even with a real token configured,
   for reproducibility (`context/phase3.md` D7).
 - OpenAI is the default LLM provider, not Gemini — the configured Gemini key is

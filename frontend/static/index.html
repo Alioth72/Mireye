@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Monitor Console</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=Source+Sans+3:ital,wght@0,300;0,400;0,600;1,400&family=JetBrains+Mono:wght@400;500;700&display=swap">
+<link rel="stylesheet" href="/static/css/tokens.css">
+<link rel="stylesheet" href="/static/css/console.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-mark" aria-hidden="true"></span>
+    <span class="brand-name">The Monitor</span>
+  </div>
+
+  <nav class="tabs" role="tablist" aria-label="Views">
+    <button class="tab is-active" id="tab-watch"  role="tab" aria-selected="true"  aria-controls="view-watch">Watch</button>
+    <button class="tab"           id="tab-replay" role="tab" aria-selected="false" aria-controls="view-replay">Replay</button>
+    <button class="tab"           id="tab-ledger" role="tab" aria-selected="false" aria-controls="view-ledger">Ledger</button>
+  </nav>
+
+  <div class="topbar-right">
+    <span class="stat" id="budget-readout" title="Credits remaining">&mdash;</span>
+    <span class="health" id="health-dot" data-state="unknown" title="Backend health"></span>
+    <button class="theme-toggle" id="theme-toggle" aria-label="Toggle colour theme">◐</button>
+  </div>
+</header>
+
+<!-- ══════════════════════════════ WATCH ══════════════════════════════ -->
+<main class="view is-active" id="view-watch" role="tabpanel" aria-labelledby="tab-watch">
+  <div class="watch-grid">
+
+    <!-- ── column 1: public record ── -->
+    <section class="col col-feed" aria-label="Event feed">
+      <div class="col-hd">
+        <h2 class="col-title">Public record</h2>
+        <span class="col-count" id="feed-count">0</span>
+      </div>
+
+      <div class="filters">
+        <label class="fl"><input type="checkbox" id="filter-show-silenced" checked> Show silenced</label>
+        <select class="fl-select" id="filter-stage" aria-label="Filter by stage">
+          <option value="">All stages</option>
+          <option value="PROPOSED">Proposed</option>
+          <option value="HEARD">Heard</option>
+          <option value="ADOPTED">Adopted</option>
+          <option value="REJECTED">Rejected</option>
+          <option value="WITHDRAWN">Withdrawn</option>
+          <option value="TABLED">Tabled</option>
+        </select>
+      </div>
+
+      <ul class="feed" id="event-feed" role="list"></ul>
+      <p class="empty" id="feed-empty" hidden>No events yet. Run the ingest to populate the record.</p>
+
+      <div class="col-hd col-hd--sub">
+        <h2 class="col-title">Monitored sites</h2>
+        <span class="col-count" id="site-count">0</span>
+      </div>
+      <ul class="sites" id="site-list" role="list"></ul>
+    </section>
+
+    <!-- ── column 2: the map ── -->
+    <section class="col col-map" aria-label="Map">
+      <div class="map-shell">
+        <div id="map" class="map" role="application" aria-label="Site and vicinity map"></div>
+        <div id="map-fallback" class="map-fallback" hidden>
+          <svg id="map-fallback-svg" viewBox="0 0 400 400" role="img"
+               aria-label="Local vicinity diagram shown because the map could not load"></svg>
+          <p class="map-fallback-note" id="map-fallback-note"></p>
+        </div>
+
+        <div class="map-legend" id="map-legend">
+          <span class="lg-item"><i class="lg-dot lg-alert"></i>alert</span>
+          <span class="lg-item"><i class="lg-dot lg-review"></i>review</span>
+          <span class="lg-item"><i class="lg-dot lg-silence"></i>silence</span>
+          <span class="lg-sep"></span>
+          <span class="lg-item"><i class="lg-ring"></i>250 / 750 / 1500 m</span>
+        </div>
+
+        <div class="map-caption" id="map-caption" hidden>
+          <strong id="map-caption-main"></strong>
+          <span id="map-caption-sub"></span>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── column 3: the decision ── -->
+    <section class="col col-decision" aria-label="Decision">
+      <div id="decision-panel" class="decision-panel">
+        <p class="empty">Select an event and a site to see the decision.</p>
+      </div>
+    </section>
+
+  </div>
+</main>
+
+<!-- ══════════════════════════════ REPLAY ══════════════════════════════ -->
+<main class="view" id="view-replay" role="tabpanel" aria-labelledby="tab-replay" hidden>
+  <div class="page">
+    <h2 class="page-title">Replay &amp; lead time</h2>
+    <p class="page-sub">Alert date against adoption and against first press coverage. An alert after the news is worthless.</p>
+    <div id="replay-summary" class="replay-summary"></div>
+    <div id="replay-timeline" class="replay-timeline"></div>
+    <div id="replay-misses" class="replay-misses"></div>
+  </div>
+</main>
+
+<!-- ══════════════════════════════ LEDGER ══════════════════════════════ -->
+<main class="view" id="view-ledger" role="tabpanel" aria-labelledby="tab-ledger" hidden>
+  <div class="page">
+    <h2 class="page-title">Credit ledger</h2>
+    <p class="page-sub" id="ledger-headline">&mdash;</p>
+    <div id="ledger-table" class="ledger-table"></div>
+  </div>
+</main>
+
+<div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+
+<script type="module" src="/static/js/app.js"></script>
+</body>
+</html>

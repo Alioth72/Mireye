@@ -1,0 +1,140 @@
+/* ============================================================================
+   The Monitor Console — design tokens.
+   Owned by the shell. console.css styles components THROUGH these tokens and
+   must never redefine a colour inside a media query or [data-theme] block:
+   the default "system" state stamps nothing on <html>, so a colour that only
+   exists behind [data-theme] never applies there.
+   ========================================================================= */
+
+:root {
+  /* ground / surfaces — cool neutrals biased toward the cartographic accent */
+  --ground:      #F5F6F8;
+  --surface:     #FFFFFF;
+  --surface-2:   #E9ECF1;
+  --surface-3:   #DFE4EB;
+
+  /* ink */
+  --ink:         #141922;
+  --ink-2:       #39424F;
+  --muted:       #66707E;
+
+  /* lines */
+  --line:        #D2D8E0;
+  --line-strong: #A3ADBB;
+
+  /* accent — cartographic blue. NOT a semantic decision colour. */
+  --accent:      #215C8C;
+  --accent-2:    #2F7CB8;
+  --accent-soft: #E1EAF2;
+
+  /* semantic decision colours — these three ARE the product vocabulary */
+  --alert:        #B23A2F;
+  --alert-soft:   #F8E6E3;
+  --review:       #8A6212;
+  --review-soft:  #F7EEDA;
+  --silence:      #33684A;
+  --silence-soft: #E2EFE7;
+
+  /* map surface tints (used by both the live map and the SVG fallback) */
+  --ring:         #A3ADBB;
+  --hull:         #33684A;
+  --hull-fill:    rgba(51, 104, 74, 0.18);
+
+  --shadow-sm: 0 1px 0 rgba(20, 25, 34, .05);
+  --shadow-md: 0 2px 10px rgba(20, 25, 34, .08);
+
+  /* type */
+  --font-display: "Archivo", system-ui, sans-serif;
+  --font-body:    "Source Sans 3", "Segoe UI", system-ui, sans-serif;
+  --font-mono:    "JetBrains Mono", ui-monospace, "Cascadia Mono", monospace;
+
+  /* rhythm */
+  --sp-1: 4px;  --sp-2: 8px;  --sp-3: 12px; --sp-4: 16px;
+  --sp-5: 24px; --sp-6: 32px; --sp-7: 48px;
+  --topbar-h: 54px;
+  --radius: 2px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground:      #0E1218;
+    --surface:     #151A22;
+    --surface-2:   #1C232D;
+    --surface-3:   #242D39;
+
+    --ink:         #DEE4EC;
+    --ink-2:       #B0B9C6;
+    --muted:       #818C9B;
+
+    --line:        #28313D;
+    --line-strong: #3C4756;
+
+    --accent:      #6BA8D8;
+    --accent-2:    #8CC0E8;
+    --accent-soft: #152532;
+
+    --alert:        #E28B80;
+    --alert-soft:   #2B1917;
+    --review:       #D9AE5C;
+    --review-soft:  #2A2216;
+    --silence:      #79BC93;
+    --silence-soft: #15251C;
+
+    --ring:         #3C4756;
+    --hull:         #79BC93;
+    --hull-fill:    rgba(121, 188, 147, 0.16);
+
+    --shadow-sm: 0 1px 0 rgba(0, 0, 0, .35);
+    --shadow-md: 0 2px 10px rgba(0, 0, 0, .45);
+  }
+}
+
+:root[data-theme="dark"] {
+  --ground:      #0E1218;
+  --surface:     #151A22;
+  --surface-2:   #1C232D;
+  --surface-3:   #242D39;
+
+  --ink:         #DEE4EC;
+  --ink-2:       #B0B9C6;
+  --muted:       #818C9B;
+
+  --line:        #28313D;
+  --line-strong: #3C4756;
+
+  --accent:      #6BA8D8;
+  --accent-2:    #8CC0E8;
+  --accent-soft: #152532;
+
+  --alert:        #E28B80;
+  --alert-soft:   #2B1917;
+  --review:       #D9AE5C;
+  --review-soft:  #2A2216;
+  --silence:      #79BC93;
+  --silence-soft: #15251C;
+
+  --ring:         #3C4756;
+  --hull:         #79BC93;
+  --hull-fill:    rgba(121, 188, 147, 0.16);
+
+  --shadow-sm: 0 1px 0 rgba(0, 0, 0, .35);
+  --shadow-md: 0 2px 10px rgba(0, 0, 0, .45);
+}
+
+/* minimal reset the shell relies on */
+*, *::before, *::after { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0;
+  background: var(--ground);
+  color: var(--ink);
+  font-family: var(--font-body);
+  font-size: 15px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+}
+button, input, select { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--accent-2); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}

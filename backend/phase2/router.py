@@ -342,3 +342,26 @@ def fetch_log(
         query = query.where(FetchLog.site_id == site_id)
     rows = session.exec(query).all()
     return [row.model_dump(mode="json") for row in rows]
+
+
+# --------------------------------------------------------------------------
+# console read surface -- cache-only, costs nothing
+# --------------------------------------------------------------------------
+@router.get("/sites", tags=["sites"])
+def list_sites(session: Session = Depends(get_session)) -> list[dict[str, Any]]:
+    """Every registered site, newest first, straight out of `p2_site`.
+
+    Deliberately cache-only, and that is the point rather than an omission: it touches
+    only the Site rows, so it can never geocode, never pull a bundle, and never cost a
+    credit. A console that draws a site list on every page load must be free to call.
+
+    It reuses `_site_json` instead of shaping its own payload so that a site read one at
+    a time (`GET /v1/sites/{site_id}`) and the same site read in a list can never drift
+    apart -- including `degraded`, which is a property rather than a column and is the
+    one field a console must not silently lose.
+
+    No `event_type` filter (or any other event-shaped parameter) belongs on this route:
+    Phase 2 is event-blind by design, and every event-side question is Phase 3's.
+    """
+    rows = session.exec(select(Site).order_by(Site.created_at.desc())).all()
+    return [_site_json(site) for site in rows]

@@ -6,12 +6,28 @@ Mireye physical features (Phase 2) → materiality decision, `ALERT` or `SILENCE
 `context/phase1.md`, `context/phase2.md`, `context/phase3.md` for each phase's full
 integration contract, decisions, and cross-phase asks.
 
+## Repository layout
+
+Two trees, **two virtual environments**. The backend carries the Mireye and LLM stack;
+the frontend carries only a web server and an HTTP client. Keeping the environments
+apart is not tidiness — it is what stops the console importing a phase module and
+quietly bypassing the API boundary the three phases were designed around.
+
+```
+backend/     the three phases + the combined API      (cwd for backend commands)
+frontend/    the operator console, map-first          (cwd for frontend commands)
+context/     the per-phase decision logs — read GLOBAL.md first
+Plan/        the brief, the Mireye API reference, the PAD-US bug report
+```
+
 ## Quickstart — the whole pipeline, one command
 
+Run these from `backend/`:
+
 ```bash
-pip install -r requirements.txt
-pytest -q                          # 124 passed, no network/LLM/Mireye key required
-python scripts/run_pipeline.py     # public record -> event -> physical features -> ALERT/SILENCE
+.venv/Scripts/python.exe -m pip install -r requirements.txt
+.venv/Scripts/python.exe -m pytest tests -q     # 124 passed, no network/LLM/Mireye key required
+.venv/Scripts/python.exe scripts/run_pipeline.py  # record -> event -> physical features -> ALERT/SILENCE
 ```
 
 `run_pipeline.py` ingests a real bill through Phase 1's actual pipeline (classify →
@@ -34,10 +50,20 @@ end to end (D7) but is intentionally not the demo's default path, for the same
 reproducibility reason. See "Setup" below for what's needed to run with no credentials
 at all, or to point Phase 2 at the live Mireye API.
 
-**Serve the combined API** (Phase 1 mounted at `/phase1`, Phase 2 + Phase 3 as routers):
+**Serve the combined API** (Phase 1 mounted at `/phase1`, Phase 2 + Phase 3 as routers),
+from `backend/`:
 ```bash
-uvicorn phase3.app:app --reload --port 8000
+.venv/Scripts/python.exe -m uvicorn phase3.app:app --reload --port 8000
 ```
+
+**Serve the console**, from `frontend/` in a second terminal — it proxies `/api/*` to the
+backend above, so start the backend first:
+```bash
+.venv/Scripts/python.exe -m uvicorn app:app --reload --port 8080
+```
+Then open <http://127.0.0.1:8080>. The map needs a Google Maps browser key in
+`frontend/.env`; without one the console falls back to an inline SVG vicinity diagram, so
+the demo survives having no key and no network. See `frontend/README.md`.
 - `GET  /phase1/events`, `GET /phase1/events/{id}` — Phase 1
 - `POST /v1/sites`, `GET /v1/sites/{id}/{bundle}`, `GET /v1/fetch-log` — Phase 2
 - `POST /v1/decide` — Phase 3 (`{event_id or event, site_id}` → `MaterialityDecision`)

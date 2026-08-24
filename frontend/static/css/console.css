@@ -1,0 +1,1567 @@
+/* ============================================================================
+   The Monitor Console — component stylesheet.
+
+   Everything here is expressed through the custom properties declared in
+   tokens.css. There is not a single raw colour literal in this file: no hex,
+   no named colour, no bare rgb(). Transparency is obtained with color-mix()
+   against a token, so all three theme states (light, dark, and the unstamped
+   "system" default) resolve correctly without this file ever defining a
+   colour inside a media query or a [data-theme] block.
+
+   House rules followed throughout:
+     - square corners; --radius (2px) used sparingly, most edges are flush
+     - hairline 1px borders in --line
+     - 1px grid gaps over a --line background, producing table seams rather
+       than floating cards
+     - --font-display for headings, --font-body for prose, --font-mono for
+       every number, field name, identifier, coordinate and status
+     - tabular-nums wherever digits stack in a column
+     - --alert / --review / --silence always carry a second, non-colour cue
+     - --accent is cartographic (selection, adoption, the brand mark) and is
+       never used to mean a decision state
+
+   Contents
+     01  base + resets that must not out-specify components
+     02  topbar
+     03  views and pages
+     04  watch grid + columns
+     05  column headers and filters
+     06  feed
+     07  sites
+     08  map, legend, caption, fallback
+     09  decision panel
+     10  status pills
+     11  ledger
+     12  replay
+     13  toast
+     14  responsive
+   ========================================================================= */
+
+
+/* == 01 ==  base ========================================================== */
+
+/* Bare type selectors only (specificity 0,0,1) so that no component class is
+   ever silently out-specified by an element reset. */
+h1, h2, h3, h4, h5, h6,
+p, ul, ol, figure, blockquote, dl, dd { margin: 0; padding: 0; }
+ul, ol { list-style: none; }
+
+/* The reset does not guarantee that [hidden] beats a grid/flex display,
+   so force it. This must also outrank .view.is-active, hence !important. */
+[hidden] { display: none !important; }
+
+body {
+  overflow-x: hidden;
+  text-rendering: optimizeLegibility;
+}
+
+/* Every surface where digits stack in a column. */
+.stat,
+.col-count,
+.feed-meta,
+.feed-tally,
+.site-sub,
+.comp-val,
+.dp-score,
+.dp-metric,
+.dp-site,
+.cite-when,
+.led-fields,
+.led-quoted,
+.led-charged,
+.led-when,
+.replay-stat-v,
+.tl-label { font-variant-numeric: tabular-nums; }
+
+
+/* == 02 ==  topbar ======================================================== */
+
+.topbar {
+  position: fixed;
+  inset: 0 0 auto 0;
+  z-index: 60;
+  height: var(--topbar-h);
+  display: flex;
+  align-items: stretch;
+  gap: var(--sp-5);
+  padding: 0 var(--sp-4);
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex: 0 0 auto;
+}
+
+/* A survey mark: square within a square, not a logo blob. */
+.brand-mark {
+  position: relative;
+  width: 14px;
+  height: 14px;
+  border: 1px solid var(--accent);
+}
+.brand-mark::after {
+  content: "";
+  position: absolute;
+  inset: 3px;
+  background: var(--accent);
+}
+
+.brand-name {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 13px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--ink);
+  white-space: nowrap;
+}
+
+.tabs {
+  display: flex;
+  align-items: stretch;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.tabs::-webkit-scrollbar { display: none; }
+
+.tab {
+  appearance: none;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  padding: 0 var(--sp-4);
+  font-family: var(--font-display);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--muted);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color 120ms linear, background-color 120ms linear,
+              border-color 120ms linear;
+}
+.tab:hover {
+  color: var(--ink);
+  background: var(--surface-2);
+}
+.tab:focus-visible {
+  outline: 2px solid var(--accent-2);
+  outline-offset: -2px;
+}
+.tab.is-active {
+  color: var(--ink);
+  border-bottom-color: var(--accent);
+}
+.tab.is-active:hover { background: var(--accent-soft); }
+
+.topbar-right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  flex: 0 0 auto;
+}
+
+.stat {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  color: var(--ink-2);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  padding: 2px var(--sp-2);
+  white-space: nowrap;
+}
+
+/* Health carries shape as well as colour: filled disc up, filled square
+   down, dashed hollow ring unknown. */
+.health {
+  width: 10px;
+  height: 10px;
+  flex: 0 0 auto;
+  border: 1px solid var(--line-strong);
+  background: var(--muted);
+  border-radius: 50%;
+}
+.health[data-state="up"] {
+  background: var(--silence);
+  border-color: var(--silence);
+}
+.health[data-state="down"] {
+  background: var(--alert);
+  border-color: var(--alert);
+  border-radius: 0;
+}
+.health[data-state="unknown"] {
+  background: transparent;
+  border-color: var(--line-strong);
+  border-style: dashed;
+}
+
+.theme-toggle {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink-2);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background-color 120ms linear, color 120ms linear;
+}
+.theme-toggle:hover {
+  background: var(--surface-2);
+  color: var(--ink);
+}
+
+
+/* == 03 ==  views and pages =============================================== */
+
+.view { display: none; }
+.view.is-active {
+  display: block;
+  padding-top: var(--topbar-h);
+}
+
+.page {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: var(--sp-6) var(--sp-5) var(--sp-7);
+}
+
+.page-title {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 22px;
+  letter-spacing: -0.01em;
+  color: var(--ink);
+}
+
+.page-sub {
+  margin-top: var(--sp-2);
+  margin-bottom: var(--sp-5);
+  max-width: 64ch;
+  font-size: 14px;
+  color: var(--muted);
+}
+
+.empty {
+  padding: var(--sp-5) var(--sp-4);
+  font-size: 13px;
+  color: var(--muted);
+  text-align: center;
+}
+
+
+/* == 04 ==  watch grid + columns ========================================== */
+
+/* 1px gaps over a --line ground: the columns read as ruled panes, not as
+   cards floating on a page. */
+.watch-grid {
+  display: grid;
+  grid-template-columns: 300px minmax(0, 1fr) 340px;
+  gap: 1px;
+  background: var(--line);
+  height: calc(100vh - var(--topbar-h));
+  height: calc(100dvh - var(--topbar-h));
+  overflow: hidden;
+}
+
+.col {
+  min-width: 0;
+  min-height: 0;
+  background: var(--surface);
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+}
+
+.col-map {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--surface-2);
+}
+
+.col-decision { background: var(--surface); }
+
+
+/* == 05 ==  column headers and filters ==================================== */
+
+.col-hd {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  padding: var(--sp-3);
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--line);
+}
+
+.col-hd--sub {
+  z-index: 2;
+  border-top: 1px solid var(--line);
+}
+
+.col-title {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 11px;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+}
+
+.col-count {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--muted);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  padding: 0 var(--sp-1);
+  min-width: 22px;
+  text-align: center;
+}
+
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2) var(--sp-3);
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
+}
+
+.fl {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-2);
+  cursor: pointer;
+  user-select: none;
+}
+.fl input[type="checkbox"] {
+  width: 13px;
+  height: 13px;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.fl-select {
+  flex: 1 1 120px;
+  min-width: 0;
+  appearance: none;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 3px var(--sp-2);
+  cursor: pointer;
+}
+.fl-select:hover { border-color: var(--line-strong); }
+
+
+/* == 06 ==  feed ========================================================== */
+
+.feed { display: block; }
+
+.feed-item {
+  position: relative;
+  display: block;
+  padding: var(--sp-3);
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
+  border-left: 3px solid transparent;
+  cursor: pointer;
+  transition: background-color 110ms linear;
+}
+.feed-item:hover { background: var(--surface-2); }
+.feed-item:focus-visible {
+  outline: 2px solid var(--accent-2);
+  outline-offset: -2px;
+}
+
+/* Selection is cartographic (accent), never a decision colour, and is
+   additionally marked by a solid rule down the right edge. */
+.feed-item.is-selected { background: var(--accent-soft); }
+.feed-item.is-selected::after {
+  content: "";
+  position: absolute;
+  top: -1px;
+  right: 0;
+  bottom: -1px;
+  width: 3px;
+  background: var(--accent);
+}
+
+.feed-title {
+  display: block;
+  font-family: var(--font-body);
+  font-weight: 600;
+  font-size: 13.5px;
+  line-height: 1.35;
+  color: var(--ink);
+}
+
+/* Decision cue 1 of 3 — GLYPH SHAPE: up-triangle / diamond / disc / ring.
+   Distinguishable in greyscale and at a glance. */
+.feed-title::before {
+  content: "\25CB";
+  display: inline-block;
+  width: 1.15em;
+  margin-left: -0.1em;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  vertical-align: 0.05em;
+  color: var(--muted);
+}
+
+/* Decision cue 2 of 3 — RAIL WEIGHT AND STROKE STYLE. */
+.feed-item[data-decision="alert"]   { border-left: 4px solid var(--alert); }
+.feed-item[data-decision="review"]  { border-left: 3px dashed var(--review); }
+.feed-item[data-decision="silence"] { border-left: 2px solid var(--silence); }
+.feed-item[data-decision="none"]    { border-left: 2px solid var(--line); }
+
+/* Decision cue 3 of 3 — HUE. */
+.feed-item[data-decision="alert"]   .feed-title::before { content: "\25B2"; color: var(--alert); }
+.feed-item[data-decision="review"]  .feed-title::before { content: "\25C6"; color: var(--review); }
+.feed-item[data-decision="silence"] .feed-title::before { content: "\25CF"; color: var(--silence); }
+.feed-item[data-decision="none"]    .feed-title::before { content: "\25CB"; color: var(--muted); }
+
+.feed-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-1) var(--sp-2);
+  margin-top: var(--sp-1);
+  padding-left: 1.15em;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.02em;
+  color: var(--muted);
+}
+
+.feed-stage {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 500;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  padding: 0 var(--sp-1);
+  white-space: nowrap;
+}
+
+.feed-subject {
+  display: block;
+  margin-top: var(--sp-1);
+  padding-left: 1.15em;
+  font-family: var(--font-body);
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--ink-2);
+}
+
+.feed-tally {
+  display: block;
+  margin-top: var(--sp-1);
+  padding-left: 1.15em;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.02em;
+  color: var(--muted);
+}
+
+
+/* == 07 ==  sites ========================================================= */
+
+.sites { display: block; }
+
+.site-item {
+  display: grid;
+  grid-template-columns: 12px minmax(0, 1fr);
+  align-items: start;
+  column-gap: var(--sp-2);
+  row-gap: 2px;
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
+  border-left: 3px solid transparent;
+  cursor: pointer;
+  transition: background-color 110ms linear;
+}
+.site-item:hover { background: var(--surface-2); }
+.site-item:focus-visible {
+  outline: 2px solid var(--accent-2);
+  outline-offset: -2px;
+}
+.site-item.is-selected {
+  background: var(--accent-soft);
+  border-left-color: var(--accent);
+}
+
+/* SHAPE is the primary cue on the dot — square = alert, diamond = review,
+   disc = silence, hollow ring = undecided. Hue is secondary. */
+.site-dot {
+  grid-row: 1;
+  grid-column: 1;
+  width: 9px;
+  height: 9px;
+  margin-top: 5px;
+  background: var(--muted);
+  border: 1px solid var(--line-strong);
+  border-radius: 50%;
+}
+.site-item[data-decision="alert"] .site-dot {
+  border-radius: 0;
+  background: var(--alert);
+  border-color: var(--alert);
+}
+.site-item[data-decision="review"] .site-dot {
+  border-radius: 0;
+  background: var(--review);
+  border-color: var(--review);
+  transform: rotate(45deg);
+}
+.site-item[data-decision="silence"] .site-dot {
+  background: var(--silence);
+  border-color: var(--silence);
+}
+.site-item[data-decision="none"] .site-dot {
+  background: transparent;
+  border-color: var(--line-strong);
+}
+.site-item[data-decision="alert"]   { border-left-color: var(--alert); }
+.site-item[data-decision="review"]  { border-left-color: var(--review); border-left-style: dashed; }
+.site-item[data-decision="silence"] { border-left-color: var(--silence); }
+
+.site-label {
+  grid-column: 2;
+  font-family: var(--font-body);
+  font-weight: 600;
+  font-size: 13px;
+  line-height: 1.3;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.site-sub {
+  grid-column: 2;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.02em;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.site-degraded {
+  grid-column: 2;
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--sp-1);
+  margin-top: 2px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--review);
+}
+.site-degraded::before { content: "\26A0"; }
+
+
+/* == 08 ==  map =========================================================== */
+
+.map-shell {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  background: var(--surface-2);
+}
+
+.map {
+  position: absolute;
+  inset: 0;
+  background: var(--surface-2);
+}
+
+.map-fallback {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-3);
+  padding: var(--sp-5);
+  background: var(--ground);
+}
+
+/* map.js draws into this with currentColor where it can. */
+.map-fallback-svg {
+  display: block;
+  width: min(100%, 420px);
+  height: auto;
+  max-height: 62%;
+  color: var(--ink-2);
+  overflow: visible;
+}
+
+.map-fallback-note {
+  max-width: 46ch;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.6;
+  text-align: center;
+  color: var(--muted);
+}
+
+/* Floating overlays: near-opaque --surface plus a hairline, so they stay
+   legible above any basemap tile in either theme. */
+.map-legend {
+  position: absolute;
+  left: var(--sp-3);
+  bottom: var(--sp-3);
+  z-index: 500;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  max-width: calc(100% - var(--sp-5));
+  padding: var(--sp-1) var(--sp-2);
+  background: var(--surface);
+  background: color-mix(in srgb, var(--surface) 90%, transparent);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+  backdrop-filter: blur(3px);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+}
+
+.lg-item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  white-space: nowrap;
+}
+
+/* Legend swatches mirror the site-dot shapes exactly, and every one is
+   labelled in words beside it. */
+.lg-dot {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 auto;
+  background: var(--muted);
+  border: 1px solid var(--line-strong);
+}
+.lg-alert {
+  background: var(--alert);
+  border-color: var(--alert);
+  border-radius: 0;
+}
+.lg-review {
+  background: var(--review);
+  border-color: var(--review);
+  border-radius: 0;
+  transform: rotate(45deg);
+}
+.lg-silence {
+  background: var(--silence);
+  border-color: var(--silence);
+  border-radius: 50%;
+}
+
+.lg-sep {
+  width: 1px;
+  height: 12px;
+  flex: 0 0 auto;
+  background: var(--line);
+}
+
+/* Concentric rings, echoing the 250 / 750 / 1500 m vicinity circles. */
+.lg-ring {
+  width: 10px;
+  height: 10px;
+  flex: 0 0 auto;
+  margin-right: 3px;
+  background: transparent;
+  border: 1px solid var(--ring);
+  border-radius: 50%;
+  box-shadow: 0 0 0 2px var(--surface), 0 0 0 3px var(--ring);
+}
+
+.map-caption {
+  position: absolute;
+  left: 50%;
+  bottom: var(--sp-3);
+  transform: translateX(-50%);
+  z-index: 500;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  max-width: min(520px, calc(100% - var(--sp-6)));
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--surface);
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-md);
+  backdrop-filter: blur(3px);
+  text-align: center;
+}
+
+#map-caption-main {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 12px;
+  letter-spacing: 0.02em;
+  color: var(--ink);
+}
+
+#map-caption-sub {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.02em;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+
+/* == 09 ==  decision panel ================================================ */
+
+.decision-panel { display: block; }
+.dp { display: block; }
+
+.dp-head {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  padding: var(--sp-3);
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--line);
+}
+
+/* The verdict SPELLS THE STATE OUT in words — that word is the primary cue.
+   Border weight and stroke are the second, hue the third. */
+.dp-verdict {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-1) var(--sp-3);
+  font-family: var(--font-mono);
+  font-weight: 700;
+  font-size: 13px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+  background: var(--surface);
+  border: 1px solid var(--line);
+}
+.dp-verdict::before {
+  content: "\25CB";
+  font-size: 11px;
+  letter-spacing: 0;
+}
+.dp-verdict[data-decision="alert"] {
+  color: var(--alert);
+  background: var(--alert-soft);
+  border: 3px solid var(--alert);
+}
+.dp-verdict[data-decision="alert"]::before { content: "\25B2"; }
+
+.dp-verdict[data-decision="review"] {
+  color: var(--review);
+  background: var(--review-soft);
+  border: 2px dashed var(--review);
+}
+.dp-verdict[data-decision="review"]::before { content: "\25C6"; }
+
+.dp-verdict[data-decision="silence"] {
+  color: var(--silence);
+  background: var(--silence-soft);
+  border: 1px solid var(--silence);
+}
+.dp-verdict[data-decision="silence"]::before { content: "\25CF"; }
+
+.dp-verdict[data-decision="none"] {
+  color: var(--muted);
+  background: var(--surface);
+  border: 1px dashed var(--line-strong);
+}
+.dp-verdict[data-decision="none"]::before { content: "\25CB"; }
+
+.dp-site {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+  letter-spacing: 0.02em;
+  color: var(--ink-2);
+  overflow-wrap: anywhere;
+}
+
+.dp-section {
+  padding: var(--sp-3);
+  border-bottom: 1px solid var(--line);
+}
+
+.dp-section-title {
+  display: block;
+  margin-bottom: var(--sp-2);
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 10px;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.dp-quote {
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--surface-2);
+  border-left: 2px solid var(--line-strong);
+  font-family: var(--font-body);
+  font-style: italic;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--ink-2);
+  overflow-wrap: anywhere;
+}
+
+.dp-cite {
+  display: block;
+  margin-top: var(--sp-1);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.02em;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+/* -- gates -------------------------------------------------------------- */
+
+.dp-gates {
+  display: grid;
+  gap: 1px;
+  background: var(--line);
+  border: 1px solid var(--line);
+}
+
+.gate {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr);
+  column-gap: var(--sp-2);
+  row-gap: 2px;
+  padding: var(--sp-2);
+  background: var(--surface);
+  border-left: 2px solid transparent;
+}
+.gate::before {
+  content: "\25CB";
+  grid-row: 1;
+  grid-column: 1;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+/* Fired: triangle glyph, 4px solid rail, alert ground. */
+.gate.is-fired {
+  background: var(--alert-soft);
+  border-left: 4px solid var(--alert);
+}
+.gate.is-fired::before {
+  content: "\25B2";
+  color: var(--alert);
+}
+
+/* Passed: check glyph, thin rail, plain ground — quiet by design. */
+.gate.is-passed {
+  background: var(--surface);
+  border-left: 2px solid var(--silence);
+}
+.gate.is-passed::before {
+  content: "\2713";
+  color: var(--silence);
+}
+
+.gate-name {
+  grid-column: 2;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  font-weight: 500;
+  letter-spacing: 0.03em;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+.gate.is-fired .gate-name { color: var(--alert); }
+
+.gate-note {
+  grid-column: 2;
+  font-family: var(--font-body);
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+
+/* -- score components --------------------------------------------------- */
+
+.dp-components { display: block; }
+
+.comp {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 92px 48px;
+  grid-template-areas:
+    "name  bar   val"
+    "basis basis basis";
+  align-items: center;
+  column-gap: var(--sp-2);
+  row-gap: 2px;
+  padding: var(--sp-2) 0;
+  border-bottom: 1px solid var(--line);
+}
+.comp:last-child { border-bottom: 0; }
+
+.comp-name {
+  grid-area: name;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  color: var(--ink-2);
+  overflow-wrap: anywhere;
+}
+
+/* The track is an inline-size container, so the fill's gradient can be sized
+   to the TRACK (100cqw) instead of to itself. panels.js sets the fill width
+   inline; the fill then clips a full-track silence -> review -> alert ramp,
+   so the colour read is a function of the VALUE, not of the element. Nothing
+   but colour, height and transition is declared on the fill here. */
+.comp-bar {
+  grid-area: bar;
+  container-type: inline-size;
+  position: relative;
+  height: 7px;
+  background: var(--surface-3);
+  border: 1px solid var(--line);
+  overflow: hidden;
+}
+
+.comp-fill {
+  position: relative;
+  height: 100%;
+  max-width: 100%;
+  overflow: hidden;
+  background: var(--silence);
+  transition: width 200ms ease-out;
+}
+.comp-fill::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  width: 100cqw;
+  background: linear-gradient(
+    90deg,
+    var(--silence) 0%,
+    var(--silence) 28%,
+    var(--review) 58%,
+    var(--alert) 88%,
+    var(--alert) 100%
+  );
+}
+
+.comp-val {
+  grid-area: val;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-align: right;
+  color: var(--ink);
+}
+
+.comp-basis {
+  grid-area: basis;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1.5;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+/* -- score, metrics, meta ----------------------------------------------- */
+
+.dp-score {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  font-family: var(--font-mono);
+  font-weight: 700;
+  font-size: 30px;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+}
+
+.dp-metric {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  padding: 3px 0;
+  border-bottom: 1px dotted var(--line);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-2);
+}
+.dp-metric:last-child { border-bottom: 0; }
+
+.dp-meta {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1.6;
+  letter-spacing: 0.02em;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+/* Provisional calibration and stale as-of dates: noticeable, not alarming.
+   --review ground, warning glyph, single heavier edge — never --alert. */
+.dp-caveat {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr);
+  column-gap: var(--sp-2);
+  margin-top: var(--sp-2);
+  padding: var(--sp-2);
+  background: var(--review-soft);
+  border: 1px solid var(--review);
+  border-left-width: 3px;
+  font-family: var(--font-body);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--ink-2);
+}
+.dp-caveat::before {
+  content: "\26A0";
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--review);
+}
+
+/* -- citations ---------------------------------------------------------- */
+
+.dp-citations {
+  display: grid;
+  gap: 1px;
+  background: var(--line);
+  border: 1px solid var(--line);
+}
+
+.cite-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
+  column-gap: var(--sp-2);
+  row-gap: 1px;
+  padding: var(--sp-2);
+  background: var(--surface);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  line-height: 1.5;
+}
+
+.cite-field {
+  grid-column: 1;
+  font-weight: 500;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.cite-src {
+  grid-column: 2;
+  text-align: right;
+  color: var(--ink-2);
+  overflow-wrap: anywhere;
+}
+
+.cite-lic {
+  grid-column: 1;
+  justify-self: start;
+  padding: 0 var(--sp-1);
+  font-size: 9.5px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--muted);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+}
+
+.cite-when {
+  grid-column: 2;
+  text-align: right;
+  color: var(--muted);
+}
+
+
+/* == 10 ==  status pills ================================================== */
+
+/* Four answers that must never collapse into one another:
+     ok       check glyph, positive hue, hairline        — a clean answer
+     absent   empty-set glyph, NEUTRAL hue, solid strong hairline. This is a
+              REAL ANSWER ("the source says there is nothing here"), so it
+              must not read as a failure: no alert hue, no heavy border.
+     failed   cross glyph, alert hue, 2px border          — a genuine gap
+     unknown  question glyph, dashed border, muted        — not yet asked */
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: 0 var(--sp-1);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  color: var(--ink-2);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+}
+.status-pill::before {
+  content: "?";
+  font-size: 10px;
+  letter-spacing: 0;
+}
+
+.status-pill[data-tone="ok"] {
+  color: var(--silence);
+  background: var(--silence-soft);
+  border: 1px solid var(--silence);
+}
+.status-pill[data-tone="ok"]::before { content: "\2713"; }
+
+.status-pill[data-tone="absent"] {
+  color: var(--ink-2);
+  background: var(--surface-2);
+  border: 1px solid var(--line-strong);
+}
+.status-pill[data-tone="absent"]::before { content: "\2205"; }
+
+.status-pill[data-tone="failed"] {
+  color: var(--alert);
+  background: var(--alert-soft);
+  border: 2px solid var(--alert);
+}
+.status-pill[data-tone="failed"]::before { content: "\2715"; }
+
+.status-pill[data-tone="unknown"] {
+  color: var(--muted);
+  background: var(--surface);
+  border: 1px dashed var(--line-strong);
+}
+.status-pill[data-tone="unknown"]::before { content: "?"; }
+
+
+/* == 11 ==  ledger ======================================================== */
+
+.ledger-table { display: block; }
+
+.ledger {
+  display: grid;
+  gap: 1px;
+  background: var(--line);
+  border: 1px solid var(--line);
+}
+
+.ledger-head,
+.ledger-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) minmax(0, 2fr) 74px 84px 132px;
+  grid-template-areas: "trigger fields quoted charged when";
+  column-gap: var(--sp-3);
+  align-items: baseline;
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--surface);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+.ledger-head {
+  position: sticky;
+  top: var(--topbar-h);
+  z-index: 2;
+  background: var(--surface-2);
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.ledger-group {
+  display: grid;
+  gap: 1px;
+  background: var(--line);
+}
+
+.ledger-group-hd {
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--surface-3);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--ink-2);
+  overflow-wrap: anywhere;
+}
+
+.ledger-row { color: var(--ink-2); }
+.ledger-row:hover { background: var(--surface-2); }
+
+.led-trigger {
+  grid-area: trigger;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.led-fields {
+  grid-area: fields;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.led-quoted {
+  grid-area: quoted;
+  text-align: right;
+  color: var(--ink);
+}
+
+.led-charged {
+  grid-area: charged;
+  text-align: right;
+  color: var(--ink);
+}
+
+.led-when {
+  grid-area: when;
+  text-align: right;
+  white-space: nowrap;
+  color: var(--muted);
+}
+
+/* A fetch charged against the budget that returned no quote is a real
+   defect — the whole reason this ledger exists. It must look wrong on
+   sight: alert ground, 4px rail, warning glyph, alert ink on every cell. */
+.led-unquoted {
+  background: var(--alert-soft);
+  border-left: 4px solid var(--alert);
+  color: var(--alert);
+}
+.led-unquoted:hover { background: var(--alert-soft); }
+.led-unquoted .led-trigger,
+.led-unquoted .led-fields,
+.led-unquoted .led-quoted,
+.led-unquoted .led-charged { color: var(--alert); }
+.led-unquoted .led-trigger::before,
+.led-unquoted:not(:has(.led-trigger))::before {
+  content: "\26A0";
+  display: inline-block;
+  width: 1.3em;
+  margin-left: -0.1em;
+  font-weight: 700;
+}
+
+
+/* == 12 ==  replay ======================================================== */
+
+.replay-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 1px;
+  margin-bottom: var(--sp-5);
+  background: var(--line);
+  border: 1px solid var(--line);
+}
+
+.replay-stat {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  padding: var(--sp-4);
+  background: var(--surface);
+}
+
+.replay-stat-v {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  font-size: 26px;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+}
+
+.replay-stat-l {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.replay-timeline {
+  display: grid;
+  gap: 1px;
+  margin-bottom: var(--sp-5);
+  background: var(--line);
+}
+.replay-timeline:not(:empty) { border: 1px solid var(--line); }
+
+.tl-row {
+  display: grid;
+  grid-template-columns: minmax(0, 200px) minmax(0, 1fr);
+  align-items: center;
+  column-gap: var(--sp-3);
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--surface);
+}
+
+.tl-label {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.tl-track {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+  min-height: 26px;
+}
+
+/* Timeline markers. Each names its own event in text (supplied by
+   panels.js), each carries a distinct glyph and border treatment.
+   .tl-adopt is cartographic --accent: adoption is a fact, not a verdict. */
+.tl-alert,
+.tl-adopt,
+.tl-press {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: 1px var(--sp-2);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.tl-alert {
+  color: var(--alert);
+  background: var(--alert-soft);
+  border: 2px solid var(--alert);
+}
+.tl-alert::before { content: "\25B2"; }
+
+.tl-adopt {
+  color: var(--accent);
+  background: var(--accent-soft);
+  border: 1px solid var(--accent);
+}
+.tl-adopt::before { content: "\25A0"; }
+
+.tl-press {
+  color: var(--review);
+  background: var(--review-soft);
+  border: 1px dashed var(--review);
+}
+.tl-press::before { content: "\25C6"; }
+
+/* The lead-time span between two markers. */
+.tl-gap {
+  flex: 1 1 auto;
+  min-width: 24px;
+  align-self: center;
+  padding: 0 var(--sp-2);
+  border-top: 1px dashed var(--line-strong);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-align: center;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.replay-misses {
+  display: grid;
+  gap: 1px;
+  background: var(--line);
+}
+.replay-misses:not(:empty) { border: 1px solid var(--line); }
+
+.replay-empty {
+  padding: var(--sp-5);
+  background: var(--surface);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  text-align: center;
+  color: var(--muted);
+}
+
+
+/* == 13 ==  toast ========================================================= */
+
+.toast {
+  position: fixed;
+  right: var(--sp-4);
+  bottom: var(--sp-4);
+  z-index: 100;
+  max-width: min(380px, calc(100vw - var(--sp-6)));
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--line-strong);
+  box-shadow: var(--shadow-md);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--ink);
+  opacity: 0;
+  transform: translateY(6px);
+  transition: opacity 160ms linear, transform 160ms ease-out;
+}
+
+.toast.is-visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.toast::before {
+  content: "";
+  display: inline-block;
+  font-weight: 700;
+}
+
+.toast[data-tone="alert"] {
+  color: var(--alert);
+  background: var(--alert-soft);
+  border-color: var(--alert);
+  border-left-width: 4px;
+}
+.toast[data-tone="alert"]::before { content: "\25B2"; width: 1.4em; margin-left: -0.1em; }
+
+.toast[data-tone="review"] {
+  color: var(--review);
+  background: var(--review-soft);
+  border-color: var(--review);
+  border-left-style: dashed;
+  border-left-width: 4px;
+}
+.toast[data-tone="review"]::before { content: "\25C6"; width: 1.4em; margin-left: -0.1em; }
+
+.toast[data-tone="silence"] {
+  color: var(--silence);
+  background: var(--silence-soft);
+  border-color: var(--silence);
+  border-left-width: 2px;
+}
+.toast[data-tone="silence"]::before { content: "\25CF"; width: 1.4em; margin-left: -0.1em; }
+
+
+/* == 14 ==  responsive ==================================================== */
+/* Layout only below this line. No colour is ever declared inside a media
+   query, because the unstamped "system" theme state would never see it. */
+
+@media (max-width: 1100px) {
+  .watch-grid {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-rows: minmax(260px, 44vh) minmax(0, 1fr);
+    grid-template-areas:
+      "map      map"
+      "feed decision";
+    height: auto;
+    min-height: calc(100vh - var(--topbar-h));
+    min-height: calc(100dvh - var(--topbar-h));
+    overflow: visible;
+  }
+  .col-feed     { grid-area: feed; }
+  .col-map      { grid-area: map; min-height: 260px; }
+  .col-decision { grid-area: decision; }
+}
+
+@media (max-width: 860px) {
+  .ledger-head,
+  .ledger-row {
+    grid-template-columns: minmax(0, 1fr) 74px 84px;
+    grid-template-areas:
+      "trigger quoted charged"
+      "fields  when   when";
+    row-gap: 2px;
+  }
+  .ledger-head { position: static; }
+  .tl-row {
+    grid-template-columns: minmax(0, 1fr);
+    row-gap: var(--sp-1);
+  }
+  .tl-track { flex-wrap: wrap; }
+  .tl-gap { flex-basis: 100%; }
+}
+
+@media (max-width: 700px) {
+  .watch-grid {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: 42vh auto auto;
+    grid-template-areas:
+      "map"
+      "feed"
+      "decision";
+  }
+  .col { overflow-y: visible; }
+  .col-map { min-height: 240px; }
+  .col-hd,
+  .dp-head { position: static; }
+  .page { padding: var(--sp-5) var(--sp-4) var(--sp-6); }
+}
+
+@media (max-width: 520px) {
+  .topbar {
+    gap: var(--sp-3);
+    padding: 0 var(--sp-2);
+  }
+  .brand-name { display: none; }
+  .tab { padding: 0 var(--sp-2); }
+  .stat { display: none; }
+  .map-caption { max-width: calc(100% - var(--sp-4)); }
+  .comp { grid-template-columns: minmax(0, 1fr) 64px 44px; }
+}
